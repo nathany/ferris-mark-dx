@@ -246,7 +246,7 @@ impl D3D11Context {
                 Width: width,
                 Height: height,
                 RefreshRate: DXGI_RATIONAL {
-                    Numerator: 60,  // 60 Hz refresh rate
+                    Numerator: 60,  // 60 Hz refresh rate, ignored when Windowed: TRUE
                     Denominator: 1, // for smooth animation
                 },
                 Format: DXGI_FORMAT_R8G8B8A8_UNORM, // 32-bit RGBA color (8 bits per channel)
