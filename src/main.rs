@@ -11,6 +11,10 @@ use windows::{
     Win32::UI::Input::KeyboardAndMouse::*, Win32::UI::WindowsAndMessaging::*, core::*,
 };
 
+// Configuration constants
+const MAX_SPRITES: usize = 10000; // Maximum sprites supported by the batch system
+const MAX_SPRITES_CMDLINE: usize = 5000; // Maximum sprites allowed from command line
+
 // Vertex structure for our textured quad
 // #[repr(C)] ensures memory layout matches what DirectX expects
 #[repr(C)]
@@ -81,28 +85,31 @@ impl Sprite {
     }
 }
 
-// SpriteBatch for efficient sprite rendering
-// Collects multiple sprites into a single draw call
+/// SpriteBatch for efficient sprite rendering
+/// Collects multiple sprites into a single draw call to minimize GPU state changes
 struct SpriteBatch {
-    vertices: Vec<Vertex>,
-    indices: Vec<u16>,
-    max_sprites: usize,
+    vertices: Vec<Vertex>, // Vertex data for all sprites in the batch
+    indices: Vec<u16>,     // Index data for all sprites in the batch
+    max_sprites: usize,    // Maximum number of sprites this batch can hold
 }
 
 impl SpriteBatch {
+    /// Create a new SpriteBatch with the specified maximum sprite capacity
     fn new(max_sprites: usize) -> Self {
         Self {
-            vertices: Vec::with_capacity(max_sprites * 4), // 4 vertices per sprite
+            vertices: Vec::with_capacity(max_sprites * 4), // 4 vertices per sprite quad
             indices: Vec::with_capacity(max_sprites * 6),  // 6 indices per sprite (2 triangles)
             max_sprites,
         }
     }
 
+    /// Clear all sprites from the batch
     fn clear(&mut self) {
         self.vertices.clear();
         self.indices.clear();
     }
 
+    /// Add a sprite to the batch with the specified position and dimensions
     fn add(
         &mut self,
         x: f32,
@@ -113,19 +120,20 @@ impl SpriteBatch {
         window_height: f32,
     ) {
         if self.vertices.len() / 4 >= self.max_sprites {
-            return; // Batch is full
+            return; // Batch is full - cannot add more sprites
         }
 
         let current_sprite = (self.vertices.len() / 4) as u16;
         let base_index = current_sprite * 4;
 
         // Convert pixel coordinates to NDC coordinates [-1, 1]
+        // NDC: X [-1,1] left to right, Y [-1,1] bottom to top
         let left_ndc = (x / window_width) * 2.0 - 1.0;
         let right_ndc = ((x + width) / window_width) * 2.0 - 1.0;
-        let top_ndc = 1.0 - (y / window_height) * 2.0;
+        let top_ndc = 1.0 - (y / window_height) * 2.0; // Flip Y axis
         let bottom_ndc = 1.0 - ((y + height) / window_height) * 2.0;
 
-        // Add 4 vertices for the sprite quad
+        // Add 4 vertices for the sprite quad (2 triangles)
         self.vertices.extend_from_slice(&[
             Vertex {
                 position: [right_ndc, top_ndc, 0.0],
@@ -145,9 +153,9 @@ impl SpriteBatch {
             }, // top left
         ]);
 
-        // Add 6 indices for 2 triangles (quad)
+        // Add 6 indices for 2 triangles forming a quad
         self.indices.extend_from_slice(&[
-            base_index + 0,
+            base_index,
             base_index + 1,
             base_index + 3, // first triangle
             base_index + 1,
@@ -156,10 +164,12 @@ impl SpriteBatch {
         ]);
     }
 
+    /// Get the number of sprites currently in the batch
     fn sprite_count(&self) -> usize {
         self.vertices.len() / 4
     }
 
+    /// Check if the batch is empty
     fn is_empty(&self) -> bool {
         self.vertices.is_empty()
     }
@@ -370,7 +380,7 @@ impl D3D11Context {
             sprite_width: 128.0,  // Will be updated when texture is loaded
             sprite_height: 128.0, // Will be updated when texture is loaded
             sprites: Vec::new(),
-            sprite_batch: SpriteBatch::new(1000000), // Support up to 1,000,000 sprites
+            sprite_batch: SpriteBatch::new(MAX_SPRITES), // Support batching for all sprites
             last_time: now,
             frame_count: 0,
             last_log_time: now,
@@ -717,18 +727,18 @@ impl D3D11Context {
         }
     }
 
-    // Update the sprite batch with current sprite data
+    /// Update the sprite batch with current sprite data and upload to GPU
     unsafe fn update_sprite_batch(&mut self) -> Result<()> {
-        // Clear the batch and rebuild it
+        // Clear the batch and rebuild it with current sprite positions
         self.sprite_batch.clear();
 
-        // Get physical sprite dimensions (adjusted for DPI)
+        // Get physical sprite dimensions (adjusted for DPI scaling)
         let physical_sprite_width = self.sprite_width / self.dpi_scale;
         let physical_sprite_height = self.sprite_height / self.dpi_scale;
 
         // Add each sprite to the batch
         for sprite in &self.sprites {
-            // Convert sprite center position to top-left corner for batch
+            // Convert sprite center position to top-left corner for rendering
             let x = sprite.position[0] - physical_sprite_width / 2.0;
             let y = sprite.position[1] - physical_sprite_height / 2.0;
 
@@ -742,53 +752,58 @@ impl D3D11Context {
             );
         }
 
-        // Update vertex buffer with batch data
+        // Upload vertex data to GPU if we have sprites to render
         if !self.sprite_batch.is_empty() {
             if let Some(vertex_buffer) = &self.vertex_buffer {
                 let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
-                self.device_context.Map(
-                    vertex_buffer,
-                    0,
-                    D3D11_MAP_WRITE_DISCARD,
-                    0,
-                    Some(&mut mapped_resource),
-                )?;
+                unsafe {
+                    self.device_context.Map(
+                        vertex_buffer,
+                        0,
+                        D3D11_MAP_WRITE_DISCARD,
+                        0,
+                        Some(&mut mapped_resource),
+                    )?;
 
-                // Copy vertex data
-                let vertex_data = self.sprite_batch.vertices.as_ptr() as *const u8;
-                let vertex_size = std::mem::size_of::<Vertex>() * self.sprite_batch.vertices.len();
-                std::ptr::copy_nonoverlapping(
-                    vertex_data,
-                    mapped_resource.pData as *mut u8,
-                    vertex_size,
-                );
+                    // Copy vertex data to GPU memory
+                    let vertex_data = self.sprite_batch.vertices.as_ptr() as *const u8;
+                    let vertex_size =
+                        std::mem::size_of::<Vertex>() * self.sprite_batch.vertices.len();
+                    std::ptr::copy_nonoverlapping(
+                        vertex_data,
+                        mapped_resource.pData as *mut u8,
+                        vertex_size,
+                    );
 
-                self.device_context.Unmap(vertex_buffer, 0);
+                    self.device_context.Unmap(vertex_buffer, 0);
+                }
             }
         }
 
-        // Update index buffer with batch data
+        // Upload index data to GPU if we have sprites to render
         if !self.sprite_batch.is_empty() {
             if let Some(index_buffer) = &self.index_buffer {
                 let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
-                self.device_context.Map(
-                    index_buffer,
-                    0,
-                    D3D11_MAP_WRITE_DISCARD,
-                    0,
-                    Some(&mut mapped_resource),
-                )?;
+                unsafe {
+                    self.device_context.Map(
+                        index_buffer,
+                        0,
+                        D3D11_MAP_WRITE_DISCARD,
+                        0,
+                        Some(&mut mapped_resource),
+                    )?;
 
-                // Copy index data
-                let index_data = self.sprite_batch.indices.as_ptr() as *const u8;
-                let index_size = std::mem::size_of::<u16>() * self.sprite_batch.indices.len();
-                std::ptr::copy_nonoverlapping(
-                    index_data,
-                    mapped_resource.pData as *mut u8,
-                    index_size,
-                );
+                    // Copy index data to GPU memory
+                    let index_data = self.sprite_batch.indices.as_ptr() as *const u8;
+                    let index_size = std::mem::size_of::<u16>() * self.sprite_batch.indices.len();
+                    std::ptr::copy_nonoverlapping(
+                        index_data,
+                        mapped_resource.pData as *mut u8,
+                        index_size,
+                    );
 
-                self.device_context.Unmap(index_buffer, 0);
+                    self.device_context.Unmap(index_buffer, 0);
+                }
             }
         }
 
@@ -974,16 +989,18 @@ impl D3D11Context {
 
 static mut D3D_CONTEXT: Option<D3D11Context> = None;
 
+/// Parse sprite count from command line arguments with validation
+/// Returns the number of sprites to create, capped at MAX_SPRITES_CMDLINE
 fn get_sprite_count() -> usize {
     let args: Vec<String> = env::args().collect();
     if args.len() > 1 {
         match args[1].parse::<usize>() {
             Ok(count) => {
-                if count > 0 && count <= 1000000 {
+                if count > 0 && count <= MAX_SPRITES_CMDLINE {
                     count
                 } else {
                     println!(
-                        "Warning: Sprite count must be between 1 and 1000000. Using default: 100"
+                        "Warning: Sprite count must be between 1 and {MAX_SPRITES_CMDLINE}. Using default: 100"
                     );
                     100
                 }
