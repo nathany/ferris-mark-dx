@@ -182,6 +182,36 @@ impl D3D11Context {
         let device_context = device_context.unwrap();
         let swap_chain = swap_chain.unwrap();
 
+        // Create blend state for alpha transparency
+        let blend_desc = D3D11_BLEND_DESC {
+            AlphaToCoverageEnable: FALSE,
+            IndependentBlendEnable: FALSE,
+            RenderTarget: [
+                D3D11_RENDER_TARGET_BLEND_DESC {
+                    BlendEnable: TRUE,
+                    SrcBlend: D3D11_BLEND_SRC_ALPHA,
+                    DestBlend: D3D11_BLEND_INV_SRC_ALPHA,
+                    BlendOp: D3D11_BLEND_OP_ADD,
+                    SrcBlendAlpha: D3D11_BLEND_ONE,
+                    DestBlendAlpha: D3D11_BLEND_ZERO,
+                    BlendOpAlpha: D3D11_BLEND_OP_ADD,
+                    RenderTargetWriteMask: D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8,
+                },
+                D3D11_RENDER_TARGET_BLEND_DESC::default(),
+                D3D11_RENDER_TARGET_BLEND_DESC::default(),
+                D3D11_RENDER_TARGET_BLEND_DESC::default(),
+                D3D11_RENDER_TARGET_BLEND_DESC::default(),
+                D3D11_RENDER_TARGET_BLEND_DESC::default(),
+                D3D11_RENDER_TARGET_BLEND_DESC::default(),
+                D3D11_RENDER_TARGET_BLEND_DESC::default(),
+            ],
+        };
+
+        let mut blend_state = None;
+        unsafe {
+            device.CreateBlendState(&blend_desc, Some(&mut blend_state))?;
+        }
+
         // Create render target view
         let back_buffer: ID3D11Texture2D = unsafe { swap_chain.GetBuffer(0)? };
         let mut render_target_view = None;
@@ -233,7 +263,7 @@ impl D3D11Context {
             texture_view: None,
             sampler_state: None,
             constant_buffer: None,
-            blend_state: None,
+            blend_state,
             window_width: 1920.0,
             window_height: 1080.0,
             dpi_scale,
@@ -271,7 +301,9 @@ impl D3D11Context {
 
     unsafe fn create_quad_resources(&mut self) -> Result<()> {
         // Load texture first to get dimensions
-        self.load_texture()?;
+        unsafe {
+            self.load_texture()?;
+        }
 
         // Define quad vertices (adjust for DPI scaling to get proper physical size)
         let physical_sprite_width = self.sprite_width / self.dpi_scale; // Smaller on high-DPI displays
@@ -472,7 +504,7 @@ impl D3D11Context {
         // Update sprite dimensions based on actual PNG size
         self.sprite_width = width as f32;
         self.sprite_height = height as f32;
-        println!("Loaded sprite: {}x{} pixels", width, height);
+        println!("Loaded sprite: {width}x{height} pixels");
 
         // Create texture description
         let texture_desc = D3D11_TEXTURE2D_DESC {
@@ -607,6 +639,16 @@ impl D3D11Context {
                 // Set up the rendering pipeline
                 self.device_context
                     .OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
+
+                // Set blend state for alpha transparency
+                if let Some(blend_state) = &self.blend_state {
+                    let blend_factor = [0.0, 0.0, 0.0, 0.0];
+                    self.device_context.OMSetBlendState(
+                        blend_state,
+                        Some(&blend_factor),
+                        0xffffffff,
+                    );
+                }
 
                 // Set vertex buffer
                 if let Some(vertex_buffer) = &self.vertex_buffer {
