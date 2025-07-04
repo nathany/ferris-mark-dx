@@ -85,7 +85,10 @@ impl Sprite {
 
         // Create simple translation matrix (row-major for HLSL mul(vector, matrix))
         [
-            1.0, 0.0, 0.0, ndc_x, 0.0, 1.0, 0.0, ndc_y, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            1.0, 0.0, 0.0, ndc_x, //
+            0.0, 1.0, 0.0, ndc_y, //
+            0.0, 0.0, 1.0, 0.0, //
+            0.0, 0.0, 0.0, 1.0, //
         ]
     }
 }

@@ -15,7 +15,7 @@ The DirectXTK SpriteBatch is a sophisticated batching system that:
 
 ### Key Features
 1. **Batching System**: Groups sprites by texture to minimize draw calls
-2. **Sorting Modes**: 
+2. **Sorting Modes**:
    - Deferred (queue and batch)
    - Immediate (draw immediately)
    - By Texture (sort by texture to optimize batching)
@@ -117,12 +117,12 @@ impl D3D11Context {
     pub fn create_sprite_batch(&self) -> Result<SpriteBatch, Error> {
         SpriteBatch::new(self.device_context.as_ref())
     }
-    
+
     pub fn render_sprites(&mut self) -> Result<(), Error> {
         let mut sprite_batch = self.create_sprite_batch()?;
-        
+
         sprite_batch.begin(SpriteSortMode::Texture, None, None, None, None, None)?;
-        
+
         for sprite in &self.sprites {
             sprite_batch.draw(
                 self.texture_view.as_ref(),
@@ -136,7 +136,7 @@ impl D3D11Context {
                 0.0, // depth
             )?;
         }
-        
+
         sprite_batch.end()?;
         Ok(())
     }
@@ -212,14 +212,14 @@ impl SpriteBatch {
             .or_insert_with(Vec::new)
             .extend_from_slice(&vertices);
     }
-    
+
     fn create_sprite_vertices(&self, sprite: &Sprite) -> [SpriteVertex; 4] {
         // Create 4 vertices for a quad (no rotation/scaling)
         let x = sprite.position.x;
         let y = sprite.position.y;
         let w = sprite.sprite_width;
         let h = sprite.sprite_height;
-        
+
         [
             SpriteVertex { position: [x, y, 0.0], tex_coord: [0.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
             SpriteVertex { position: [x + w, y, 0.0], tex_coord: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
@@ -236,14 +236,14 @@ impl SpriteBatch {
     pub unsafe fn render(&mut self, context: &D3D11Context) -> Result<(), Box<dyn std::error::Error>> {
         for (texture_ptr, vertices) in &self.batches {
             if vertices.is_empty() { continue; }
-            
+
             // Set texture
             let texture = &**texture_ptr;
             context.device_context.PSSetShaderResources(0, 1, &Some(texture.clone()));
-            
+
             // Update vertex buffer
             self.update_vertex_buffer(context, vertices)?;
-            
+
             // Draw all sprites for this texture in one call
             let quad_count = vertices.len() / 4;
             context.device_context.DrawIndexed(
@@ -252,7 +252,7 @@ impl SpriteBatch {
                 0
             );
         }
-        
+
         // Clear batches for next frame
         self.batches.clear();
         Ok(())
@@ -273,16 +273,16 @@ impl D3D11Context {
     unsafe fn render(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Clear render target (existing code)
         self.device_context.ClearRenderTargetView(/* ... */);
-        
+
         // Collect sprites into batches
         let mut sprite_batch = SpriteBatch::new();
         for sprite in &self.sprites {
             sprite_batch.add_sprite(&self.texture_view, sprite);
         }
-        
+
         // Render all batches
         sprite_batch.render(self)?;
-        
+
         // Present (existing code)
         self.swap_chain.Present(1, 0);
         Ok(())
