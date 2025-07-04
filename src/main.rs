@@ -25,6 +25,8 @@ struct Sprite {
     position: [f32; 2],
     velocity: [f32; 2],
     dpi_scale: f32,
+    sprite_width: f32,
+    sprite_height: f32,
 }
 
 impl Sprite {
@@ -38,7 +40,9 @@ impl Sprite {
         Self {
             position: [100.0, 100.0], // Start at top-left area
             velocity: [angle.cos() * speed, angle.sin() * speed],
-            dpi_scale: 1.0, // Will be set properly when sprite is created
+            dpi_scale: 1.0,       // Will be set properly when sprite is created
+            sprite_width: 128.0,  // Will be set properly when sprite is created
+            sprite_height: 128.0, // Will be set properly when sprite is created
         }
     }
 
@@ -48,8 +52,8 @@ impl Sprite {
         self.position[1] += self.velocity[1] * dt;
 
         // Sprite dimensions (adjusted for DPI)
-        let sprite_width = 128.0 / self.dpi_scale;
-        let sprite_height = 128.0 / self.dpi_scale;
+        let sprite_width = self.sprite_width / self.dpi_scale;
+        let sprite_height = self.sprite_height / self.dpi_scale;
 
         // Bounce off edges
         if self.position[0] <= 0.0 || self.position[0] + sprite_width >= window_width {
@@ -101,6 +105,8 @@ struct D3D11Context {
     window_width: f32,
     window_height: f32,
     dpi_scale: f32,
+    sprite_width: f32,
+    sprite_height: f32,
     sprites: Vec<Sprite>,
     last_time: Instant,
     frame_count: u32,
@@ -231,18 +237,20 @@ impl D3D11Context {
             window_width: 1920.0,
             window_height: 1080.0,
             dpi_scale,
+            sprite_width: 128.0,  // Will be updated when texture is loaded
+            sprite_height: 128.0, // Will be updated when texture is loaded
             sprites: Vec::new(),
             last_time: now,
             frame_count: 0,
             last_log_time: now,
         };
 
-        // Create quad resources
+        // Create quad resources (includes texture loading)
         unsafe {
             context.create_quad_resources()?;
         }
 
-        // Initialize sprites with count from command line or default
+        // Initialize sprites with count from command line or default (after texture loading)
         let sprite_count = get_sprite_count();
         context.init_sprites(sprite_count);
         println!("Initialized {sprite_count} sprites");
@@ -255,15 +263,21 @@ impl D3D11Context {
         for _ in 0..count {
             let mut sprite = Sprite::new();
             sprite.dpi_scale = self.dpi_scale;
+            sprite.sprite_width = self.sprite_width;
+            sprite.sprite_height = self.sprite_height;
             self.sprites.push(sprite);
         }
     }
 
     unsafe fn create_quad_resources(&mut self) -> Result<()> {
+        // Load texture first to get dimensions
+        self.load_texture()?;
+
         // Define quad vertices (adjust for DPI scaling to get proper physical size)
-        let physical_sprite_size = 128.0 / self.dpi_scale; // Smaller on high-DPI displays
-        let half_width_ndc = physical_sprite_size / self.window_width;
-        let half_height_ndc = physical_sprite_size / self.window_height;
+        let physical_sprite_width = self.sprite_width / self.dpi_scale; // Smaller on high-DPI displays
+        let physical_sprite_height = self.sprite_height / self.dpi_scale;
+        let half_width_ndc = physical_sprite_width / self.window_width;
+        let half_height_ndc = physical_sprite_height / self.window_height;
         let vertices = [
             Vertex {
                 position: [-half_width_ndc, half_height_ndc, 0.0], // Top left
@@ -402,10 +416,7 @@ impl D3D11Context {
             )?;
         }
 
-        // Load texture
-        unsafe {
-            self.load_texture()?;
-        }
+        // Texture already loaded in create_quad_resources
 
         // Create sampler state with point filtering for pixel-perfect rendering
         // Create and set up sampler state
@@ -457,6 +468,11 @@ impl D3D11Context {
         let img = img.to_rgba8();
         let (width, height) = img.dimensions();
         let pixels = img.as_raw();
+
+        // Update sprite dimensions based on actual PNG size
+        self.sprite_width = width as f32;
+        self.sprite_height = height as f32;
+        println!("Loaded sprite: {}x{} pixels", width, height);
 
         // Create texture description
         let texture_desc = D3D11_TEXTURE2D_DESC {
