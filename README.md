@@ -44,7 +44,7 @@ cargo run --release --features d3d11-debug
 The application accepts a sprite count as the first command-line argument:
 ```bash
 cargo run 100      # 100 sprites
-cargo run 500      # 500 sprites  
+cargo run 500      # 500 sprites
 cargo run 1000     # 1000 sprites
 cargo run 5000     # 5000 sprites
 ```
@@ -129,3 +129,12 @@ This implementation can be compared with other graphics APIs:
 - CPU vs GPU bottleneck analysis via sprite count scaling
 
 The sprites/second metric provides a standardized measurement for comparing 2D rendering performance across different implementations and hardware configurations.
+
+Results on an AMD 9070 XT running driver version 25.6.1:
+
+* Unbatched debug build:  rendering 11,000 sprites at 60 fps, 660,000 sprites/second, frame dips
+* Unbatched release build: rendering 100,000 sprites at 60 fps, near 6,000,000 sprites/second, frame dips
+
+```
+cargo run --release 100000
+```
