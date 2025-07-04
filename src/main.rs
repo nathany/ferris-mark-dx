@@ -52,12 +52,18 @@ impl D3D11Context {
         };
 
         // Create device, device context, and swap chain
+        // Enable debug layer in debug builds or when d3d11-debug feature is enabled
+        #[cfg(any(debug_assertions, feature = "d3d11-debug"))]
+        let create_device_flags = D3D11_CREATE_DEVICE_DEBUG;
+        #[cfg(not(any(debug_assertions, feature = "d3d11-debug")))]
+        let create_device_flags = D3D11_CREATE_DEVICE_FLAG(0);
+
         unsafe {
             D3D11CreateDeviceAndSwapChain(
                 None,
                 D3D_DRIVER_TYPE_HARDWARE,
                 None,
-                D3D11_CREATE_DEVICE_FLAG(0),
+                create_device_flags,
                 None,
                 D3D11_SDK_VERSION,
                 Some(&swap_chain_desc),
@@ -78,6 +84,12 @@ impl D3D11Context {
         unsafe {
             device.CreateRenderTargetView(&back_buffer, None, Some(&mut render_target_view))?;
         }
+
+        // Log debug layer status
+        #[cfg(any(debug_assertions, feature = "d3d11-debug"))]
+        println!("DirectX 11 Debug Layer: ENABLED");
+        #[cfg(not(any(debug_assertions, feature = "d3d11-debug")))]
+        println!("DirectX 11 Debug Layer: DISABLED");
 
         Ok(D3D11Context {
             device,
