@@ -370,7 +370,7 @@ impl D3D11Context {
             sprite_width: 128.0,  // Will be updated when texture is loaded
             sprite_height: 128.0, // Will be updated when texture is loaded
             sprites: Vec::new(),
-            sprite_batch: SpriteBatch::new(10000), // Support up to 10,000 sprites
+            sprite_batch: SpriteBatch::new(1000000), // Support up to 1,000,000 sprites
             last_time: now,
             frame_count: 0,
             last_log_time: now,
@@ -979,11 +979,11 @@ fn get_sprite_count() -> usize {
     if args.len() > 1 {
         match args[1].parse::<usize>() {
             Ok(count) => {
-                if count > 0 && count <= 100000 {
+                if count > 0 && count <= 1000000 {
                     count
                 } else {
                     println!(
-                        "Warning: Sprite count must be between 1 and 100000. Using default: 100"
+                        "Warning: Sprite count must be between 1 and 1000000. Using default: 100"
                     );
                     100
                 }
