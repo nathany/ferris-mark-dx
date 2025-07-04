@@ -826,11 +826,11 @@ fn get_sprite_count() -> usize {
     if args.len() > 1 {
         match args[1].parse::<usize>() {
             Ok(count) => {
-                if count > 0 && count <= 10000 {
+                if count > 0 && count <= 100000 {
                     count
                 } else {
                     println!(
-                        "Warning: Sprite count must be between 1 and 10000. Using default: 100"
+                        "Warning: Sprite count must be between 1 and 100000. Using default: 100"
                     );
                     100
                 }
