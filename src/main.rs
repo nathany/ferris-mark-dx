@@ -29,6 +29,8 @@ struct D3D11Context {
     texture: Option<ID3D11Texture2D>,
     texture_view: Option<ID3D11ShaderResourceView>,
     sampler_state: Option<ID3D11SamplerState>,
+    window_width: f32,
+    window_height: f32,
 }
 
 impl D3D11Context {
@@ -145,6 +147,8 @@ impl D3D11Context {
             texture: None,
             texture_view: None,
             sampler_state: None,
+            window_width: 1920.0,
+            window_height: 1080.0,
         };
 
         // Create quad resources
@@ -157,10 +161,9 @@ impl D3D11Context {
 
     unsafe fn create_quad_resources(&mut self) -> Result<()> {
         // Define quad vertices (exactly 128x128 pixels, centered on screen)
-        // Calculate exact NDC coordinates: 128 pixels / 1920 screen width = 0.0667 NDC units
-        // 128 pixels / 1080 screen height = 0.1185 NDC units
-        let half_width_ndc = 128.0 / 1920.0; // 0.0667
-        let half_height_ndc = 128.0 / 1080.0; // 0.1185
+        // Calculate exact NDC coordinates based on current window size
+        let half_width_ndc = 128.0 / self.window_width;
+        let half_height_ndc = 128.0 / self.window_height;
         let vertices = [
             Vertex {
                 position: [-half_width_ndc, half_height_ndc, 0.0], // Top left
@@ -515,12 +518,12 @@ impl D3D11Context {
                         .PSSetSamplers(0, Some(&[Some(sampler_state.clone())]));
                 }
 
-                // Set viewport for pixel-perfect rendering
+                // Set viewport for pixel-perfect rendering using current window size
                 let viewport = D3D11_VIEWPORT {
                     TopLeftX: 0.0,
                     TopLeftY: 0.0,
-                    Width: 1920.0,
-                    Height: 1080.0,
+                    Width: self.window_width,
+                    Height: self.window_height,
                     MinDepth: 0.0,
                     MaxDepth: 1.0,
                 };
@@ -539,6 +542,10 @@ impl D3D11Context {
         if width == 0 || height == 0 {
             return Ok(());
         }
+
+        // Update stored window dimensions
+        self.window_width = width as f32;
+        self.window_height = height as f32;
 
         // Release the old render target view
         self.render_target_view = None;
@@ -560,6 +567,11 @@ impl D3D11Context {
             )?;
         }
         self.render_target_view = render_target_view;
+
+        // Recreate quad with new window dimensions for proper NDC calculations
+        unsafe {
+            self.create_quad_resources()?;
+        }
 
         Ok(())
     }
