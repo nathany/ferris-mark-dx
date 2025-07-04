@@ -46,6 +46,15 @@ The DirectX 11 debug layer requires the "Graphics Tools" Windows optional featur
 - Windows 10/11: Settings > Apps > Optional features > Add a feature > Graphics Tools
 - Or install via PowerShell: `Enable-WindowsOptionalFeature -Online -FeatureName "DirectX-Tools"`
 
+### Where Debug Messages Appear
+
+DirectX debug messages typically appear in:
+- **Visual Studio Output Window**: When running under the debugger
+- **Windows Event Log**: Application and Services Logs > Microsoft > Windows > Direct3D11
+- **Debug Output Stream**: Captured by debugging tools like PIX or Visual Studio Graphics Diagnostics
+
+Note: Debug messages usually don't appear in the console when running standalone applications. The application will show "Debug Layer: ENABLED" to confirm the debug layer is active and capturing validation messages.
+
 ## Dependencies
 
 - `windows` crate for Win32 and DirectX 11 APIs

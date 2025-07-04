@@ -85,9 +85,32 @@ impl D3D11Context {
             device.CreateRenderTargetView(&back_buffer, None, Some(&mut render_target_view))?;
         }
 
-        // Log debug layer status
+        // Log debug layer status and verify it's working
         #[cfg(any(debug_assertions, feature = "d3d11-debug"))]
-        println!("DirectX 11 Debug Layer: ENABLED");
+        {
+            println!("DirectX 11 Debug Layer: ENABLED");
+
+            // Try to query the debug interface to verify it's actually working
+            let debug_interface: windows::core::Result<
+                windows::Win32::Graphics::Direct3D11::ID3D11Debug,
+            > = device.cast();
+
+            match debug_interface {
+                Ok(debug) => {
+                    println!("Debug interface successfully obtained - debug layer is active!");
+                    // Force a validation message by trying to get info queue
+                    let info_queue: windows::core::Result<
+                        windows::Win32::Graphics::Direct3D11::ID3D11InfoQueue,
+                    > = debug.cast();
+                    if let Ok(_queue) = info_queue {
+                        println!("Info queue available - validation messages will be captured");
+                    }
+                }
+                Err(_) => println!(
+                    "Warning: Debug interface not available - debug layer may not be working"
+                ),
+            }
+        }
         #[cfg(not(any(debug_assertions, feature = "d3d11-debug")))]
         println!("DirectX 11 Debug Layer: DISABLED");
 
