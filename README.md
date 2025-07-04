@@ -1,35 +1,63 @@
 # Ferris Mark DX
 
-A Windows DirectX 11 rendering experiment written in Rust.
+A Windows DirectX 11 2D sprite rendering benchmark written in Rust, inspired by [gophermark](https://github.com/unitoftime/experiments/tree/master/gophermark).
 
 ## Features
 
-- Windows 11 compatible window creation
-- DirectX 11 hardware-accelerated rendering
-- Pixel-perfect 2D rendering with orthogonal projection
-- Textured quad rendering with PNG image support
-- Point filtering (nearest neighbor) for crisp pixel art
-- Integer-based positioning and scaling
-- Proper window management (close with X button or Alt+F4)
-- Window resizing support
-- Configurable debug layer support
+- **2D Sprite Rendering**: Multiple bouncing sprites with physics simulation
+- **Performance Benchmarking**: Sprites-per-second throughput measurement
+- **DirectX 11 Hardware Acceleration**: Efficient GPU rendering pipeline
+- **Physics System**: Bouncing sprites with edge collision detection
+- **Pixel-Perfect Rendering**: 128x128 pixel sprites with precise positioning
+- **Point Filtering**: Nearest neighbor sampling for crisp pixel art
+- **Real-time Performance Metrics**: FPS and sprites/second reporting
+- **Configurable Sprite Count**: Command-line argument for testing different loads
+- **VSync Support**: Smooth 60 FPS rendering with tear-free display
+- **Debug Layer Integration**: DirectX validation and performance analysis
 
 ## Building and Running
 
-### Debug Build (with DirectX debug layer)
+### Basic Usage
 ```bash
+# Run with default 100 sprites
 cargo run
+
+# Run with specific sprite count
+cargo run 500
+cargo run 1000
+cargo run 5000
 ```
 
-### Release Build (optimized, no debug layer)
+### Build Variants
 ```bash
+# Debug Build (with DirectX debug layer)
+cargo run
+
+# Release Build (optimized, no debug layer)
 cargo run --release
-```
 
-### Release Build with Debug Layer
-```bash
+# Release Build with Debug Layer
 cargo run --release --features d3d11-debug
 ```
+
+### Benchmarking
+The application accepts a sprite count as the first command-line argument:
+```bash
+cargo run 100      # 100 sprites
+cargo run 500      # 500 sprites  
+cargo run 1000     # 1000 sprites
+cargo run 5000     # 5000 sprites
+```
+
+Performance metrics are displayed every second:
+```
+Sprites/sec: 6000000 | FPS: 60.0 | Sprites: 100000 | Frame time: 16.67ms
+```
+
+- **Sprites/sec**: Primary benchmark metric - total sprite throughput
+- **FPS**: Frames per second (capped at 60 with VSync)
+- **Sprites**: Current number of active sprites
+- **Frame time**: Time per frame in milliseconds
 
 ## DirectX 11 Debug Layer
 
@@ -70,16 +98,34 @@ Note: Debug messages usually don't appear in the console when running standalone
 - **Close Window**: Click X button or press Alt+F4
 - **Resize**: Drag window edges (DirectX swap chain automatically resizes)
 
-## Current Rendering
+## Sprite System
 
-The application renders a pixel-perfect textured quad in the center of the screen using DirectX 11. Features include:
+The application renders multiple bouncing sprites with real-time physics simulation:
 
-- **Pixel-Perfect Rendering**: 128x128 pixel quad displayed at exact native size
-- **Orthogonal Projection**: 2D coordinate system with integer positioning
-- **Point Filtering**: Nearest neighbor sampling for crisp pixel art (no antialiasing)
-- **Textured Quad**: Displays `ferris_pixel_128x128.png` image
-- **Vertex/Index Buffers**: Efficient geometry rendering
-- **Shader Pipeline**: Custom HLSL vertex and pixel shaders optimized for 2D
-- **PNG Loading**: Runtime image loading and DirectX texture creation
+### Movement System
+- **Physics Update**: Position integration with velocity and delta time
+- **Boundary Collision**: Sprites bounce off screen edges with velocity reversal
+- **Smooth Animation**: 60 FPS with VSync for tear-free movement
+- **Random Initialization**: Each sprite starts with random velocity direction
 
-This serves as a foundation for 2D games, pixel art rendering, and sprite-based graphics.
+### Rendering Pipeline
+- **Batch Rendering**: All sprites rendered in single draw call batch
+- **Transform Matrices**: Per-sprite positioning via constant buffer updates
+- **Pixel-Perfect Sprites**: 128x128 pixel sprites with exact positioning
+- **Texture Sampling**: Point filtering for crisp pixel art rendering
+- **Efficient Geometry**: Shared vertex/index buffers for all sprites
+
+### Performance Characteristics
+- **GPU Accelerated**: DirectX 11 hardware rendering pipeline
+- **Constant Buffer Updates**: Dynamic per-sprite transformation matrices
+- **Memory Efficient**: Shared geometry data, unique transform per sprite
+- **Scalable**: Performance scales with sprite count and GPU capabilities
+
+## Benchmark Comparison
+
+This implementation can be compared with other graphics APIs:
+- Original [gophermark](https://github.com/unitoftime/experiments/tree/master/gophermark) (Go + OpenGL)
+- DirectX 11 vs OpenGL performance characteristics
+- CPU vs GPU bottleneck analysis via sprite count scaling
+
+The sprites/second metric provides a standardized measurement for comparing 2D rendering performance across different implementations and hardware configurations.

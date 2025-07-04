@@ -235,7 +235,7 @@ impl D3D11Context {
         // Initialize sprites with count from command line or default
         let sprite_count = get_sprite_count();
         context.init_sprites(sprite_count);
-        println!("Initialized {} sprites", sprite_count);
+        println!("Initialized {sprite_count} sprites");
 
         Ok(context)
     }
@@ -548,15 +548,17 @@ impl D3D11Context {
             sprite.update(dt, self.window_width, self.window_height);
         }
 
-        // Log FPS occasionally (every 5 seconds to reduce debug spam)
+        // Log sprites per second (throughput benchmark like Go example)
         self.frame_count += 1;
-        if current_time.duration_since(self.last_log_time).as_secs() >= 5 {
+        if current_time.duration_since(self.last_log_time).as_secs() >= 1 {
             let fps = self.frame_count as f32
                 / current_time
                     .duration_since(self.last_log_time)
                     .as_secs_f32();
+            let sprites_per_second = fps * self.sprites.len() as f32;
             println!(
-                "FPS: {:.1} | Sprites: {} | Avg frame time: {:.2}ms",
+                "Sprites/sec: {:.0} | FPS: {:.1} | Sprites: {} | Frame time: {:.2}ms",
+                sprites_per_second,
                 fps,
                 self.sprites.len(),
                 1000.0 / fps
@@ -727,21 +729,21 @@ fn get_sprite_count() -> usize {
                     count
                 } else {
                     println!(
-                        "Warning: Sprite count must be between 1 and 10000. Using default: 1000"
+                        "Warning: Sprite count must be between 1 and 10000. Using default: 100"
                     );
-                    1000
+                    100
                 }
             }
             Err(_) => {
                 println!(
-                    "Warning: Invalid sprite count '{}'. Using default: 1000",
+                    "Warning: Invalid sprite count '{}'. Using default: 100",
                     args[1]
                 );
-                1000
+                100
             }
         }
     } else {
-        1000 // Default sprite count for benchmarking
+        100 // Default sprite count for benchmarking
     }
 }
 
