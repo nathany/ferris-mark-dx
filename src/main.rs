@@ -12,8 +12,7 @@ use windows::{
 };
 
 // Configuration constants
-const MAX_SPRITES: usize = 10000; // Maximum sprites supported by the batch system
-const MAX_SPRITES_CMDLINE: usize = 5000; // Maximum sprites allowed from command line
+const MAX_SPRITES: usize = 1000000; // Maximum sprites supported by the system
 
 // Vertex structure for our textured quad
 // #[repr(C)] ensures memory layout matches what DirectX expects
@@ -89,7 +88,7 @@ impl Sprite {
 /// Collects multiple sprites into a single draw call to minimize GPU state changes
 struct SpriteBatch {
     vertices: Vec<Vertex>, // Vertex data for all sprites in the batch
-    indices: Vec<u16>,     // Index data for all sprites in the batch
+    indices: Vec<u32>,     // Index data for all sprites in the batch
     max_sprites: usize,    // Maximum number of sprites this batch can hold
 }
 
@@ -123,7 +122,7 @@ impl SpriteBatch {
             return; // Batch is full - cannot add more sprites
         }
 
-        let current_sprite = (self.vertices.len() / 4) as u16;
+        let current_sprite = (self.vertices.len() / 4) as u32;
         let base_index = current_sprite * 4;
 
         // Convert pixel coordinates to NDC coordinates [-1, 1]
@@ -216,6 +215,7 @@ struct D3D11Context {
     sprite_height: f32,
     sprites: Vec<Sprite>,      // All sprite instances
     sprite_batch: SpriteBatch, // Batching system for efficient rendering
+    vsync: bool,               // VSync enabled/disabled setting
 
     // Performance tracking
     last_time: Instant,
@@ -381,6 +381,7 @@ impl D3D11Context {
             sprite_height: 128.0, // Will be updated when texture is loaded
             sprites: Vec::new(),
             sprite_batch: SpriteBatch::new(MAX_SPRITES), // Support batching for all sprites
+            vsync: true, // Default VSync enabled, will be overridden by command line
             last_time: now,
             frame_count: 0,
             last_log_time: now,
@@ -391,10 +392,13 @@ impl D3D11Context {
             context.create_quad_resources()?;
         }
 
-        // Initialize sprites with count from command line or default (after texture loading)
-        let sprite_count = get_sprite_count();
-        context.init_sprites(sprite_count);
-        println!("Initialized {sprite_count} sprites");
+        // Parse command line arguments for configuration
+        let config = parse_args();
+        context.init_sprites(config.sprite_count);
+        println!("Initialized {} sprites", config.sprite_count);
+
+        // Store VSync setting for use in render loop
+        context.vsync = config.vsync;
         println!(
             "Window client area: {}x{}",
             context.window_width, context.window_height
@@ -458,7 +462,7 @@ impl D3D11Context {
         // Create dynamic index buffer for batching (can hold up to max_sprites)
         let max_indices = self.sprite_batch.max_sprites * 6; // 6 indices per sprite
         let index_buffer_desc = D3D11_BUFFER_DESC {
-            ByteWidth: (std::mem::size_of::<u16>() * max_indices) as u32,
+            ByteWidth: (std::mem::size_of::<u32>() * max_indices) as u32,
             Usage: D3D11_USAGE_DYNAMIC, // Allow CPU updates
             BindFlags: D3D11_BIND_INDEX_BUFFER.0 as u32,
             CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32, // CPU can write to buffer
@@ -795,7 +799,7 @@ impl D3D11Context {
 
                     // Copy index data to GPU memory
                     let index_data = self.sprite_batch.indices.as_ptr() as *const u8;
-                    let index_size = std::mem::size_of::<u16>() * self.sprite_batch.indices.len();
+                    let index_size = std::mem::size_of::<u32>() * self.sprite_batch.indices.len();
                     std::ptr::copy_nonoverlapping(
                         index_data,
                         mapped_resource.pData as *mut u8,
@@ -850,7 +854,7 @@ impl D3D11Context {
                 // Each index refers to a vertex in the vertex buffer
                 if let Some(index_buffer) = &self.index_buffer {
                     self.device_context
-                        .IASetIndexBuffer(index_buffer, DXGI_FORMAT_R16_UINT, 0);
+                        .IASetIndexBuffer(index_buffer, DXGI_FORMAT_R32_UINT, 0);
                 }
 
                 // Set input layout - describes vertex structure to vertex shader
@@ -940,10 +944,11 @@ impl D3D11Context {
                     self.device_context.DrawIndexed(index_count, 0, 0);
                 }
 
-                // Present the frame with VSync enabled
+                // Present the frame with VSync setting from command line
                 // Present(sync_interval, flags): 1 = VSync on, 0 = VSync off
                 // VSync caps framerate to display refresh rate (usually 60fps)
-                let _ = self.swap_chain.Present(1, 0);
+                let sync_interval = if self.vsync { 1 } else { 0 };
+                let _ = self.swap_chain.Present(sync_interval, 0);
             }
         }
     }
@@ -989,20 +994,32 @@ impl D3D11Context {
 
 static mut D3D_CONTEXT: Option<D3D11Context> = None;
 
-/// Parse sprite count from command line arguments with validation
-/// Returns the number of sprites to create, capped at MAX_SPRITES_CMDLINE
-fn get_sprite_count() -> usize {
+/// Configuration parsed from command line arguments
+#[derive(Debug)]
+struct Config {
+    sprite_count: usize,
+    vsync: bool,
+}
+
+/// Parse command line arguments and return configuration
+/// Usage: ferris-mark-dx [sprite_count] [--vsync-off]
+fn parse_args() -> Config {
     let args: Vec<String> = env::args().collect();
+    let mut config = Config {
+        sprite_count: 100, // Default sprite count
+        vsync: true,       // Default VSync enabled
+    };
+
+    // Parse sprite count from first argument
     if args.len() > 1 {
         match args[1].parse::<usize>() {
             Ok(count) => {
-                if count > 0 && count <= MAX_SPRITES_CMDLINE {
-                    count
+                if count > 0 && count <= MAX_SPRITES {
+                    config.sprite_count = count;
                 } else {
                     println!(
-                        "Warning: Sprite count must be between 1 and {MAX_SPRITES_CMDLINE}. Using default: 100"
+                        "Warning: Sprite count must be between 1 and {MAX_SPRITES}. Using default: 100"
                     );
-                    100
                 }
             }
             Err(_) => {
@@ -1010,12 +1027,17 @@ fn get_sprite_count() -> usize {
                     "Warning: Invalid sprite count '{}'. Using default: 100",
                     args[1]
                 );
-                100
             }
         }
-    } else {
-        100 // Default sprite count for benchmarking
     }
+
+    // Check for VSync option
+    if args.contains(&"--vsync-off".to_string()) {
+        config.vsync = false;
+        println!("VSync disabled");
+    }
+
+    config
 }
 
 fn main() -> Result<()> {

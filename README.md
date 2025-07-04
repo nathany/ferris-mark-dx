@@ -41,6 +41,9 @@ cargo run
 cargo run 500
 cargo run 1000
 cargo run 5000
+
+# Run with VSync disabled for performance testing
+cargo run 1000 --vsync-off
 ```
 
 ## Controls
@@ -61,14 +64,21 @@ cargo run --release --features d3d11-debug
 ```
 
 ### Benchmarking
-The application accepts a sprite count as the first command-line argument:
+The application accepts a sprite count as the first command-line argument and optional VSync control:
 ```bash
-cargo run 100      # 100 sprites
-cargo run 500      # 500 sprites
-cargo run 1000     # 1000 sprites
-cargo run 5000     # 5000 sprites
+cargo run 100      # 100 sprites with VSync (default)
+cargo run 500      # 500 sprites with VSync
+cargo run 1000     # 1000 sprites with VSync
+cargo run 5000     # 5000 sprites with VSync
 
+# Test maximum performance with VSync disabled
+cargo run 1000 --vsync-off
+cargo run 10000 --vsync-off
+cargo run 100000 --vsync-off
+
+# Release builds for maximum performance
 cargo run --release 100000
+cargo run --release 1000000 --vsync-off
 ```
 
 Performance metrics are displayed every second:
@@ -77,16 +87,25 @@ Sprites/sec: 6000000 | FPS: 60.0 | Sprites: 100000 | Frame time: 16.67ms
 ```
 
 - **Sprites/sec**: Primary benchmark metric - total sprite throughput
-- **FPS**: Frames per second (capped at 60 with VSync)
+- **FPS**: Frames per second (capped at display refresh rate with VSync enabled)
 - **Sprites**: Current number of active sprites
 - **Frame time**: Time per frame in milliseconds
+
+#### VSync Control
+- **VSync enabled** (default): Framerate is capped at display refresh rate (~60 FPS)
+- **VSync disabled** (`--vsync-off`): Uncapped framerate for maximum performance testing
 
 ### Benchmark Sample Results
 
 Results running on a Ryzen 9700X and Radeon 9070 XT running driver version 25.6.1:
 
-* Unbatched debug build: rendering 11,000 sprites at 60 fps, 660,000 sprites/second, frame dips
-* Unbatched release build: rendering 100,000 sprites at 60 fps, near 6,000,000 sprites/second, frame dips
+* Unbatched debug build: rendering 11,000 sprites at 60 fps, 660,000 sprites/second
+* Unbatched release build: rendering 100,000 sprites at 60 fps, near 6,000,000 sprites/second
+* Batched debug build: rendering 240,000 sprites at locked 60 fps, 14,000,000 sprites/second
+* Batched release build: rendering 1,000,000 sprites at 60 fps, near 60,000,000 sprites/second
+* Batched release build: rendering 1,000,000 sprites at 165 fps, near 60,000,000 sprites/second
+* Batched release with vsync-off hitting 70 fps with 1,000,000 sprites or 350 fps with 200,000 sprites
+* Batched release with vsync @ 165 fps hitting 165 fps rendering 90,000 sprites
 
 ## Development
 
