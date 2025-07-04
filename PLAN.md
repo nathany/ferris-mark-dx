@@ -9,8 +9,14 @@ https://raw.githubusercontent.com/unitoftime/experiments/refs/heads/master/gophe
 
 DirectX Tool Kit (aka DirectXTK)
 
-3. SpriteBatch
+3. Port SpriteBatch to Rust
 https://raw.githubusercontent.com/microsoft/DirectXTK/refs/heads/main/Src/SpriteBatch.cpp
+
+The core concepts would be:
+- Single vertex buffer with all sprite quads
+- Instance data for transforms/textures
+- Sorting by texture/depth
+- Batch submission to reduce draw calls
 
 Later (possibly a separate project derived from this one):
 * full-screen (Alt-Enter, etc.)
