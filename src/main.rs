@@ -156,22 +156,26 @@ impl D3D11Context {
     }
 
     unsafe fn create_quad_resources(&mut self) -> Result<()> {
-        // Define quad vertices (centered, with texture coordinates)
+        // Define quad vertices (exactly 128x128 pixels, centered on screen)
+        // Calculate exact NDC coordinates: 128 pixels / 1920 screen width = 0.0667 NDC units
+        // 128 pixels / 1080 screen height = 0.1185 NDC units
+        let half_width_ndc = 128.0 / 1920.0; // 0.0667
+        let half_height_ndc = 128.0 / 1080.0; // 0.1185
         let vertices = [
             Vertex {
-                position: [-0.5, 0.5, 0.0], // Top left
-                tex_coord: [0.0, 0.0],      // UV coordinates
+                position: [-half_width_ndc, half_height_ndc, 0.0], // Top left
+                tex_coord: [0.0, 0.0],                             // UV coordinates
             },
             Vertex {
-                position: [0.5, 0.5, 0.0], // Top right
+                position: [half_width_ndc, half_height_ndc, 0.0], // Top right
                 tex_coord: [1.0, 0.0],
             },
             Vertex {
-                position: [0.5, -0.5, 0.0], // Bottom right
+                position: [half_width_ndc, -half_height_ndc, 0.0], // Bottom right
                 tex_coord: [1.0, 1.0],
             },
             Vertex {
-                position: [-0.5, -0.5, 0.0], // Bottom left
+                position: [-half_width_ndc, -half_height_ndc, 0.0], // Bottom left
                 tex_coord: [0.0, 1.0],
             },
         ];
@@ -230,7 +234,7 @@ impl D3D11Context {
             )?;
         }
 
-        // Vertex shader source
+        // Vertex shader source with simple orthogonal projection
         let vs_source = r#"
             struct VS_INPUT {
                 float3 pos : POSITION;
@@ -244,7 +248,8 @@ impl D3D11Context {
 
             VS_OUTPUT main(VS_INPUT input) {
                 VS_OUTPUT output;
-                output.pos = float4(input.pos, 1.0f);
+                // Pass through NDC coordinates directly (already calculated)
+                output.pos = float4(input.pos, 1.0);
                 output.tex = input.tex;
                 return output;
             }
@@ -329,12 +334,12 @@ impl D3D11Context {
             self.load_texture()?;
         }
 
-        // Create sampler state
+        // Create sampler state with point filtering for pixel-perfect rendering
         let sampler_desc = D3D11_SAMPLER_DESC {
-            Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-            AddressU: D3D11_TEXTURE_ADDRESS_WRAP,
-            AddressV: D3D11_TEXTURE_ADDRESS_WRAP,
-            AddressW: D3D11_TEXTURE_ADDRESS_WRAP,
+            Filter: D3D11_FILTER_MIN_MAG_MIP_POINT, // Nearest neighbor filtering
+            AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
+            AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
+            AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
             MipLODBias: 0.0,
             MaxAnisotropy: 1,
             ComparisonFunc: D3D11_COMPARISON_ALWAYS,
@@ -510,9 +515,7 @@ impl D3D11Context {
                         .PSSetSamplers(0, Some(&[Some(sampler_state.clone())]));
                 }
 
-                // Set viewport
-                let _client_rect = RECT::default();
-                // Note: We need the window handle here, but for now we'll use a default viewport
+                // Set viewport for pixel-perfect rendering
                 let viewport = D3D11_VIEWPORT {
                     TopLeftX: 0.0,
                     TopLeftY: 0.0,

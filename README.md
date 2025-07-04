@@ -6,7 +6,10 @@ A Windows DirectX 11 rendering experiment written in Rust.
 
 - Windows 11 compatible window creation
 - DirectX 11 hardware-accelerated rendering
+- Pixel-perfect 2D rendering with orthogonal projection
 - Textured quad rendering with PNG image support
+- Point filtering (nearest neighbor) for crisp pixel art
+- Integer-based positioning and scaling
 - Proper window management (close with X button or Alt+F4)
 - Window resizing support
 - Configurable debug layer support
@@ -69,12 +72,14 @@ Note: Debug messages usually don't appear in the console when running standalone
 
 ## Current Rendering
 
-The application renders a textured quad in the center of the screen using DirectX 11. Features include:
+The application renders a pixel-perfect textured quad in the center of the screen using DirectX 11. Features include:
 
+- **Pixel-Perfect Rendering**: 128x128 pixel quad displayed at exact native size
+- **Orthogonal Projection**: 2D coordinate system with integer positioning
+- **Point Filtering**: Nearest neighbor sampling for crisp pixel art (no antialiasing)
 - **Textured Quad**: Displays `ferris_pixel_128x128.png` image
 - **Vertex/Index Buffers**: Efficient geometry rendering
-- **Shader Pipeline**: Custom HLSL vertex and pixel shaders
-- **Texture Sampling**: Linear filtering with wrap addressing
+- **Shader Pipeline**: Custom HLSL vertex and pixel shaders optimized for 2D
 - **PNG Loading**: Runtime image loading and DirectX texture creation
 
-This serves as a foundation for more complex 3D graphics, animations, and effects.
+This serves as a foundation for 2D games, pixel art rendering, and sprite-based graphics.
