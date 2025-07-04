@@ -451,7 +451,7 @@ impl D3D11Context {
 
     unsafe fn load_texture(&mut self) -> Result<()> {
         // Load the PNG image
-        let img = image::open("ferris_pixel_128x128.png")
+        let img = image::open("ferris_pixel_99x70_transparent.png")
             .map_err(|_e| Error::from_hresult(windows::core::HRESULT(-1)))?;
 
         let img = img.to_rgba8();
