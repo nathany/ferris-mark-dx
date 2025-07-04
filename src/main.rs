@@ -8,12 +8,12 @@ use windows::{
     Win32::UI::WindowsAndMessaging::*, core::*,
 };
 
-// Vertex structure for our triangle
+// Vertex structure for our textured quad
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct Vertex {
     position: [f32; 3],
-    color: [f32; 4],
+    tex_coord: [f32; 2],
 }
 
 struct D3D11Context {
@@ -22,9 +22,13 @@ struct D3D11Context {
     swap_chain: IDXGISwapChain,
     render_target_view: Option<ID3D11RenderTargetView>,
     vertex_buffer: Option<ID3D11Buffer>,
+    index_buffer: Option<ID3D11Buffer>,
     vertex_shader: Option<ID3D11VertexShader>,
     pixel_shader: Option<ID3D11PixelShader>,
     input_layout: Option<ID3D11InputLayout>,
+    texture: Option<ID3D11Texture2D>,
+    texture_view: Option<ID3D11ShaderResourceView>,
+    sampler_state: Option<ID3D11SamplerState>,
 }
 
 impl D3D11Context {
@@ -134,34 +138,48 @@ impl D3D11Context {
             swap_chain,
             render_target_view,
             vertex_buffer: None,
+            index_buffer: None,
             vertex_shader: None,
             pixel_shader: None,
             input_layout: None,
+            texture: None,
+            texture_view: None,
+            sampler_state: None,
         };
 
-        // Create triangle resources
+        // Create quad resources
         unsafe {
-            context.create_triangle_resources()?;
+            context.create_quad_resources()?;
         }
 
         Ok(context)
     }
 
-    unsafe fn create_triangle_resources(&mut self) -> Result<()> {
-        // Define triangle vertices (centered, with different colors)
+    unsafe fn create_quad_resources(&mut self) -> Result<()> {
+        // Define quad vertices (centered, with texture coordinates)
         let vertices = [
             Vertex {
-                position: [0.0, 0.5, 0.0],   // Top vertex
-                color: [1.0, 0.0, 0.0, 1.0], // Red
+                position: [-0.5, 0.5, 0.0], // Top left
+                tex_coord: [0.0, 0.0],      // UV coordinates
             },
             Vertex {
-                position: [0.5, -0.5, 0.0],  // Bottom right
-                color: [0.0, 1.0, 0.0, 1.0], // Green
+                position: [0.5, 0.5, 0.0], // Top right
+                tex_coord: [1.0, 0.0],
+            },
+            Vertex {
+                position: [0.5, -0.5, 0.0], // Bottom right
+                tex_coord: [1.0, 1.0],
             },
             Vertex {
                 position: [-0.5, -0.5, 0.0], // Bottom left
-                color: [0.0, 0.0, 1.0, 1.0], // Blue
+                tex_coord: [0.0, 1.0],
             },
+        ];
+
+        // Define indices for two triangles making a quad
+        let indices: [u16; 6] = [
+            0, 1, 2, // First triangle
+            0, 2, 3, // Second triangle
         ];
 
         // Create vertex buffer
@@ -188,35 +206,62 @@ impl D3D11Context {
             )?;
         }
 
+        // Create index buffer
+        let index_buffer_desc = D3D11_BUFFER_DESC {
+            ByteWidth: (std::mem::size_of::<u16>() * indices.len()) as u32,
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_INDEX_BUFFER.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+            StructureByteStride: 0,
+        };
+
+        let index_data = D3D11_SUBRESOURCE_DATA {
+            pSysMem: indices.as_ptr() as *const _,
+            SysMemPitch: 0,
+            SysMemSlicePitch: 0,
+        };
+
+        unsafe {
+            self.device.CreateBuffer(
+                &index_buffer_desc,
+                Some(&index_data),
+                Some(&mut self.index_buffer),
+            )?;
+        }
+
         // Vertex shader source
         let vs_source = r#"
             struct VS_INPUT {
                 float3 pos : POSITION;
-                float4 color : COLOR;
+                float2 tex : TEXCOORD;
             };
 
             struct VS_OUTPUT {
                 float4 pos : SV_POSITION;
-                float4 color : COLOR;
+                float2 tex : TEXCOORD;
             };
 
             VS_OUTPUT main(VS_INPUT input) {
                 VS_OUTPUT output;
                 output.pos = float4(input.pos, 1.0f);
-                output.color = input.color;
+                output.tex = input.tex;
                 return output;
             }
         "#;
 
         // Pixel shader source
         let ps_source = r#"
+            Texture2D tex : register(t0);
+            SamplerState samplerState : register(s0);
+
             struct PS_INPUT {
                 float4 pos : SV_POSITION;
-                float4 color : COLOR;
+                float2 tex : TEXCOORD;
             };
 
             float4 main(PS_INPUT input) : SV_TARGET {
-                return input.color;
+                return tex.Sample(samplerState, input.tex);
             }
         "#;
 
@@ -258,9 +303,9 @@ impl D3D11Context {
                 InstanceDataStepRate: 0,
             },
             D3D11_INPUT_ELEMENT_DESC {
-                SemanticName: PCSTR(c"COLOR".as_ptr() as *const u8),
+                SemanticName: PCSTR(c"TEXCOORD".as_ptr() as *const u8),
                 SemanticIndex: 0,
-                Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
+                Format: DXGI_FORMAT_R32G32_FLOAT,
                 InputSlot: 0,
                 AlignedByteOffset: 12, // 3 floats * 4 bytes
                 InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
@@ -277,6 +322,85 @@ impl D3D11Context {
                 ),
                 Some(&mut self.input_layout),
             )?;
+        }
+
+        // Load texture
+        unsafe {
+            self.load_texture()?;
+        }
+
+        // Create sampler state
+        let sampler_desc = D3D11_SAMPLER_DESC {
+            Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+            AddressU: D3D11_TEXTURE_ADDRESS_WRAP,
+            AddressV: D3D11_TEXTURE_ADDRESS_WRAP,
+            AddressW: D3D11_TEXTURE_ADDRESS_WRAP,
+            MipLODBias: 0.0,
+            MaxAnisotropy: 1,
+            ComparisonFunc: D3D11_COMPARISON_ALWAYS,
+            BorderColor: [0.0, 0.0, 0.0, 0.0],
+            MinLOD: 0.0,
+            MaxLOD: f32::MAX,
+        };
+
+        unsafe {
+            self.device
+                .CreateSamplerState(&sampler_desc, Some(&mut self.sampler_state))?;
+        }
+
+        Ok(())
+    }
+
+    unsafe fn load_texture(&mut self) -> Result<()> {
+        // Load the PNG image
+        let img = image::open("ferris_pixel_128x128.png")
+            .map_err(|_e| Error::from_hresult(windows::core::HRESULT(-1)))?;
+
+        let img = img.to_rgba8();
+        let (width, height) = img.dimensions();
+        let pixels = img.as_raw();
+
+        // Create texture description
+        let texture_desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+
+        let texture_data = D3D11_SUBRESOURCE_DATA {
+            pSysMem: pixels.as_ptr() as *const _,
+            SysMemPitch: width * 4, // 4 bytes per pixel (RGBA)
+            SysMemSlicePitch: 0,
+        };
+
+        // Create texture
+        unsafe {
+            self.device.CreateTexture2D(
+                &texture_desc,
+                Some(&texture_data),
+                Some(&mut self.texture),
+            )?;
+        }
+
+        // Create shader resource view
+        if let Some(texture) = &self.texture {
+            unsafe {
+                self.device.CreateShaderResourceView(
+                    texture,
+                    None,
+                    Some(&mut self.texture_view),
+                )?;
+            }
         }
 
         Ok(())
@@ -353,6 +477,12 @@ impl D3D11Context {
                     );
                 }
 
+                // Set index buffer
+                if let Some(index_buffer) = &self.index_buffer {
+                    self.device_context
+                        .IASetIndexBuffer(index_buffer, DXGI_FORMAT_R16_UINT, 0);
+                }
+
                 // Set input layout
                 if let Some(input_layout) = &self.input_layout {
                     self.device_context.IASetInputLayout(input_layout);
@@ -370,6 +500,16 @@ impl D3D11Context {
                     self.device_context.PSSetShader(pixel_shader, None);
                 }
 
+                // Set texture and sampler
+                if let Some(texture_view) = &self.texture_view {
+                    self.device_context
+                        .PSSetShaderResources(0, Some(&[Some(texture_view.clone())]));
+                }
+                if let Some(sampler_state) = &self.sampler_state {
+                    self.device_context
+                        .PSSetSamplers(0, Some(&[Some(sampler_state.clone())]));
+                }
+
                 // Set viewport
                 let _client_rect = RECT::default();
                 // Note: We need the window handle here, but for now we'll use a default viewport
@@ -383,8 +523,8 @@ impl D3D11Context {
                 };
                 self.device_context.RSSetViewports(Some(&[viewport]));
 
-                // Draw the triangle
-                self.device_context.Draw(3, 0);
+                // Draw the quad
+                self.device_context.DrawIndexed(6, 0, 0);
 
                 // Present the frame
                 let _ = self.swap_chain.Present(1, 0);

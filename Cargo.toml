@@ -19,6 +19,11 @@ windows = { version = "0.56", features = [
     "implement"
 ] }
 
+[dependencies.image]
+version = "0.24"
+default-features = false
+features = ["png"]
+
 [features]
 default = []
 d3d11-debug = []

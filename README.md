@@ -6,6 +6,7 @@ A Windows DirectX 11 rendering experiment written in Rust.
 
 - Windows 11 compatible window creation
 - DirectX 11 hardware-accelerated rendering
+- Textured quad rendering with PNG image support
 - Proper window management (close with X button or Alt+F4)
 - Window resizing support
 - Configurable debug layer support
@@ -58,6 +59,7 @@ Note: Debug messages usually don't appear in the console when running standalone
 ## Dependencies
 
 - `windows` crate for Win32 and DirectX 11 APIs
+- `image` crate for PNG texture loading
 - Rust edition 2024
 
 ## Controls
@@ -67,4 +69,12 @@ Note: Debug messages usually don't appear in the console when running standalone
 
 ## Current Rendering
 
-The application currently renders a solid cornflower blue background using DirectX 11. This serves as a foundation for more complex 3D graphics and effects.
+The application renders a textured quad in the center of the screen using DirectX 11. Features include:
+
+- **Textured Quad**: Displays `ferris_pixel_128x128.png` image
+- **Vertex/Index Buffers**: Efficient geometry rendering
+- **Shader Pipeline**: Custom HLSL vertex and pixel shaders
+- **Texture Sampling**: Linear filtering with wrap addressing
+- **PNG Loading**: Runtime image loading and DirectX texture creation
+
+This serves as a foundation for more complex 3D graphics, animations, and effects.
