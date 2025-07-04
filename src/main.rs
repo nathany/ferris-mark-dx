@@ -79,21 +79,89 @@ impl Sprite {
             self.velocity[1] = -self.velocity[1];
         }
     }
+}
 
-    fn get_transform_matrix(&self, window_width: f32, window_height: f32) -> [f32; 16] {
-        // Convert pixel coordinates to NDC (Normalized Device Coordinates)
-        // NDC range: X [-1,1] left to right, Y [-1,1] bottom to top
-        let ndc_x = (self.position[0] / window_width) * 2.0 - 1.0;
-        let ndc_y = -((self.position[1] / window_height) * 2.0 - 1.0); // Flip Y for DirectX
+// SpriteBatch for efficient sprite rendering
+// Collects multiple sprites into a single draw call
+struct SpriteBatch {
+    vertices: Vec<Vertex>,
+    indices: Vec<u16>,
+    max_sprites: usize,
+}
 
-        // Create 4x4 translation matrix (row-major for HLSL mul(vector, matrix))
-        // This moves the sprite from origin (0,0) to the calculated NDC position
-        [
-            1.0, 0.0, 0.0, ndc_x, // Row 0: X translation
-            0.0, 1.0, 0.0, ndc_y, // Row 1: Y translation
-            0.0, 0.0, 1.0, 0.0, // Row 2: Z unchanged (2D)
-            0.0, 0.0, 0.0, 1.0, // Row 3: Homogeneous coordinate
-        ]
+impl SpriteBatch {
+    fn new(max_sprites: usize) -> Self {
+        Self {
+            vertices: Vec::with_capacity(max_sprites * 4), // 4 vertices per sprite
+            indices: Vec::with_capacity(max_sprites * 6),  // 6 indices per sprite (2 triangles)
+            max_sprites,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.vertices.clear();
+        self.indices.clear();
+    }
+
+    fn add(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        window_width: f32,
+        window_height: f32,
+    ) {
+        if self.vertices.len() / 4 >= self.max_sprites {
+            return; // Batch is full
+        }
+
+        let current_sprite = (self.vertices.len() / 4) as u16;
+        let base_index = current_sprite * 4;
+
+        // Convert pixel coordinates to NDC coordinates [-1, 1]
+        let left_ndc = (x / window_width) * 2.0 - 1.0;
+        let right_ndc = ((x + width) / window_width) * 2.0 - 1.0;
+        let top_ndc = 1.0 - (y / window_height) * 2.0;
+        let bottom_ndc = 1.0 - ((y + height) / window_height) * 2.0;
+
+        // Add 4 vertices for the sprite quad
+        self.vertices.extend_from_slice(&[
+            Vertex {
+                position: [right_ndc, top_ndc, 0.0],
+                tex_coord: [1.0, 0.0],
+            }, // top right
+            Vertex {
+                position: [right_ndc, bottom_ndc, 0.0],
+                tex_coord: [1.0, 1.0],
+            }, // bottom right
+            Vertex {
+                position: [left_ndc, bottom_ndc, 0.0],
+                tex_coord: [0.0, 1.0],
+            }, // bottom left
+            Vertex {
+                position: [left_ndc, top_ndc, 0.0],
+                tex_coord: [0.0, 0.0],
+            }, // top left
+        ]);
+
+        // Add 6 indices for 2 triangles (quad)
+        self.indices.extend_from_slice(&[
+            base_index + 0,
+            base_index + 1,
+            base_index + 3, // first triangle
+            base_index + 1,
+            base_index + 2,
+            base_index + 3, // second triangle
+        ]);
+    }
+
+    fn sprite_count(&self) -> usize {
+        self.vertices.len() / 4
+    }
+
+    fn is_empty(&self) -> bool {
+        self.vertices.is_empty()
     }
 }
 
@@ -136,7 +204,8 @@ struct D3D11Context {
     dpi_scale: f32,    // High-DPI scaling factor
     sprite_width: f32, // Sprite dimensions in pixels
     sprite_height: f32,
-    sprites: Vec<Sprite>, // All sprite instances
+    sprites: Vec<Sprite>,      // All sprite instances
+    sprite_batch: SpriteBatch, // Batching system for efficient rendering
 
     // Performance tracking
     last_time: Instant,
@@ -301,6 +370,7 @@ impl D3D11Context {
             sprite_width: 128.0,  // Will be updated when texture is loaded
             sprite_height: 128.0, // Will be updated when texture is loaded
             sprites: Vec::new(),
+            sprite_batch: SpriteBatch::new(10000), // Support up to 10,000 sprites
             last_time: now,
             frame_count: 0,
             last_log_time: now,
@@ -356,83 +426,40 @@ impl D3D11Context {
             self.load_texture()?;
         }
 
-        // Define quad vertices (adjust for DPI scaling to get proper physical size)
-        // On high-DPI displays, sprites appear smaller to maintain consistent visual size
-        let physical_sprite_width = self.sprite_width / self.dpi_scale; // Smaller on high-DPI displays
-        let physical_sprite_height = self.sprite_height / self.dpi_scale;
-        // Convert to NDC space - half dimensions because sprite center is at origin
-        let half_width_ndc = physical_sprite_width / self.window_width;
-        let half_height_ndc = physical_sprite_height / self.window_height;
-        let vertices = [
-            Vertex {
-                position: [-half_width_ndc, half_height_ndc, 0.0], // Top left in NDC
-                tex_coord: [0.0, 0.0],                             // Top left of texture
-            },
-            Vertex {
-                position: [half_width_ndc, half_height_ndc, 0.0], // Top right in NDC
-                tex_coord: [1.0, 0.0],                            // Top right of texture
-            },
-            Vertex {
-                position: [half_width_ndc, -half_height_ndc, 0.0], // Bottom right in NDC
-                tex_coord: [1.0, 1.0],                             // Bottom right of texture
-            },
-            Vertex {
-                position: [-half_width_ndc, -half_height_ndc, 0.0], // Bottom left in NDC
-                tex_coord: [0.0, 1.0],                              // Bottom left of texture
-            },
-        ];
-
-        // Define indices for two triangles making a quad
-        // GPU renders triangles, so we need 2 triangles to make a rectangle
-        let indices: [u16; 6] = [
-            0, 1, 2, // First triangle: top-left, top-right, bottom-right
-            0, 2, 3, // Second triangle: top-left, bottom-right, bottom-left
-        ];
-
-        // Create vertex buffer
+        // Create dynamic vertex buffer for batching (can hold up to max_sprites)
+        let max_vertices = self.sprite_batch.max_sprites * 4; // 4 vertices per sprite
         let vertex_buffer_desc = D3D11_BUFFER_DESC {
-            ByteWidth: (std::mem::size_of::<Vertex>() * vertices.len()) as u32,
-            Usage: D3D11_USAGE_DEFAULT,
+            ByteWidth: (std::mem::size_of::<Vertex>() * max_vertices) as u32,
+            Usage: D3D11_USAGE_DYNAMIC, // Allow CPU updates
             BindFlags: D3D11_BIND_VERTEX_BUFFER.0 as u32,
-            CPUAccessFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32, // CPU can write to buffer
             MiscFlags: 0,
             StructureByteStride: 0,
-        };
-
-        let vertex_data = D3D11_SUBRESOURCE_DATA {
-            pSysMem: vertices.as_ptr() as *const _,
-            SysMemPitch: 0,
-            SysMemSlicePitch: 0,
         };
 
         unsafe {
             self.device.CreateBuffer(
                 &vertex_buffer_desc,
-                Some(&vertex_data),
+                None, // No initial data
                 Some(&mut self.vertex_buffer),
             )?;
         }
 
-        // Create index buffer
+        // Create dynamic index buffer for batching (can hold up to max_sprites)
+        let max_indices = self.sprite_batch.max_sprites * 6; // 6 indices per sprite
         let index_buffer_desc = D3D11_BUFFER_DESC {
-            ByteWidth: (std::mem::size_of::<u16>() * indices.len()) as u32,
-            Usage: D3D11_USAGE_DEFAULT,
+            ByteWidth: (std::mem::size_of::<u16>() * max_indices) as u32,
+            Usage: D3D11_USAGE_DYNAMIC, // Allow CPU updates
             BindFlags: D3D11_BIND_INDEX_BUFFER.0 as u32,
-            CPUAccessFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32, // CPU can write to buffer
             MiscFlags: 0,
             StructureByteStride: 0,
-        };
-
-        let index_data = D3D11_SUBRESOURCE_DATA {
-            pSysMem: indices.as_ptr() as *const _,
-            SysMemPitch: 0,
-            SysMemSlicePitch: 0,
         };
 
         unsafe {
             self.device.CreateBuffer(
                 &index_buffer_desc,
-                Some(&index_data),
+                None, // No initial data
                 Some(&mut self.index_buffer),
             )?;
         }
@@ -690,6 +717,84 @@ impl D3D11Context {
         }
     }
 
+    // Update the sprite batch with current sprite data
+    unsafe fn update_sprite_batch(&mut self) -> Result<()> {
+        // Clear the batch and rebuild it
+        self.sprite_batch.clear();
+
+        // Get physical sprite dimensions (adjusted for DPI)
+        let physical_sprite_width = self.sprite_width / self.dpi_scale;
+        let physical_sprite_height = self.sprite_height / self.dpi_scale;
+
+        // Add each sprite to the batch
+        for sprite in &self.sprites {
+            // Convert sprite center position to top-left corner for batch
+            let x = sprite.position[0] - physical_sprite_width / 2.0;
+            let y = sprite.position[1] - physical_sprite_height / 2.0;
+
+            self.sprite_batch.add(
+                x,
+                y,
+                physical_sprite_width,
+                physical_sprite_height,
+                self.window_width,
+                self.window_height,
+            );
+        }
+
+        // Update vertex buffer with batch data
+        if !self.sprite_batch.is_empty() {
+            if let Some(vertex_buffer) = &self.vertex_buffer {
+                let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
+                self.device_context.Map(
+                    vertex_buffer,
+                    0,
+                    D3D11_MAP_WRITE_DISCARD,
+                    0,
+                    Some(&mut mapped_resource),
+                )?;
+
+                // Copy vertex data
+                let vertex_data = self.sprite_batch.vertices.as_ptr() as *const u8;
+                let vertex_size = std::mem::size_of::<Vertex>() * self.sprite_batch.vertices.len();
+                std::ptr::copy_nonoverlapping(
+                    vertex_data,
+                    mapped_resource.pData as *mut u8,
+                    vertex_size,
+                );
+
+                self.device_context.Unmap(vertex_buffer, 0);
+            }
+        }
+
+        // Update index buffer with batch data
+        if !self.sprite_batch.is_empty() {
+            if let Some(index_buffer) = &self.index_buffer {
+                let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
+                self.device_context.Map(
+                    index_buffer,
+                    0,
+                    D3D11_MAP_WRITE_DISCARD,
+                    0,
+                    Some(&mut mapped_resource),
+                )?;
+
+                // Copy index data
+                let index_data = self.sprite_batch.indices.as_ptr() as *const u8;
+                let index_size = std::mem::size_of::<u16>() * self.sprite_batch.indices.len();
+                std::ptr::copy_nonoverlapping(
+                    index_data,
+                    mapped_resource.pData as *mut u8,
+                    index_size,
+                );
+
+                self.device_context.Unmap(index_buffer, 0);
+            }
+        }
+
+        Ok(())
+    }
+
     unsafe fn render(&self) {
         if let Some(rtv) = &self.render_target_view {
             // Clear the render target to a solid color (cornflower blue)
@@ -778,18 +883,21 @@ impl D3D11Context {
                 };
                 self.device_context.RSSetViewports(Some(&[viewport]));
 
-                // Draw all sprites - batch rendering with shared geometry
-                // Each sprite uses the same quad geometry but different transform
-                for sprite in &self.sprites {
-                    // Calculate transform matrix for this sprite's position
-                    let transform_matrix =
-                        sprite.get_transform_matrix(self.window_width, self.window_height);
+                // Draw all sprites in a single batch
+                // Use identity transform since vertices are already in NDC space
+                if !self.sprite_batch.is_empty() {
+                    // Set identity matrix for transform (no transformation needed)
+                    let identity_matrix = [
+                        1.0, 0.0, 0.0, 0.0, // Row 1: Identity
+                        0.0, 1.0, 0.0, 0.0, // Row 2: Identity
+                        0.0, 0.0, 1.0, 0.0, // Row 3: Identity
+                        0.0, 0.0, 0.0, 1.0, // Row 4: Identity
+                    ];
                     let transform_buffer = TransformBuffer {
-                        transform: transform_matrix,
+                        transform: identity_matrix,
                     };
 
-                    // Update constant buffer with sprite's transform matrix
-                    // Dynamic buffer allows CPU to update GPU data each frame
+                    // Update constant buffer with screen-space transform
                     if let Some(constant_buffer) = &self.constant_buffer {
                         let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
                         if self
@@ -797,27 +905,24 @@ impl D3D11Context {
                             .Map(
                                 constant_buffer,
                                 0,
-                                D3D11_MAP_WRITE_DISCARD, // Discard old data, write new
+                                D3D11_MAP_WRITE_DISCARD,
                                 0,
                                 Some(&mut mapped_resource),
                             )
                             .is_ok()
                         {
-                            // Copy transform matrix to GPU memory
                             let dst = mapped_resource.pData as *mut TransformBuffer;
                             ptr::copy_nonoverlapping(&transform_buffer, dst, 1);
                             self.device_context.Unmap(constant_buffer, 0);
                         }
 
-                        // Bind constant buffer to vertex shader slot 0
                         self.device_context
                             .VSSetConstantBuffers(0, Some(&[Some(constant_buffer.clone())]));
                     }
 
-                    // Draw the sprite using indexed geometry
-                    // DrawIndexed(index_count, start_index, base_vertex)
-                    // 6 indices = 2 triangles, each triangle uses 3 indices
-                    self.device_context.DrawIndexed(6, 0, 0);
+                    // Draw all sprites with single draw call
+                    let index_count = (self.sprite_batch.sprite_count() * 6) as u32;
+                    self.device_context.DrawIndexed(index_count, 0, 0);
                 }
 
                 // Present the frame with VSync enabled
@@ -969,6 +1074,7 @@ fn main() -> Result<()> {
             let context_ptr = std::ptr::addr_of_mut!(D3D_CONTEXT);
             if let Some(context) = (*context_ptr).as_mut() {
                 context.update();
+                let _ = context.update_sprite_batch();
                 context.render();
             }
         }
