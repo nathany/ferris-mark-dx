@@ -1,4 +1,7 @@
+use std::env;
 use std::ptr;
+use std::time::Instant;
+extern crate rand;
 use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
 use windows::Win32::Graphics::Direct3D::ID3DBlob;
 use windows::{
@@ -16,6 +19,76 @@ struct Vertex {
     tex_coord: [f32; 2],
 }
 
+// Sprite structure for movement system
+#[derive(Clone, Copy)]
+struct Sprite {
+    position: [f32; 2],
+    velocity: [f32; 2],
+}
+
+impl Sprite {
+    fn new() -> Self {
+        use std::f32::consts::PI;
+
+        // Random angle and speed
+        let angle = rand::random::<f32>() * 2.0 * PI;
+        let speed = 200.0 + rand::random::<f32>() * 100.0; // 200-300 pixels/second
+
+        Self {
+            position: [100.0, 100.0], // Start at top-left area
+            velocity: [angle.cos() * speed, angle.sin() * speed],
+        }
+    }
+
+    fn update(&mut self, dt: f32, window_width: f32, window_height: f32) {
+        // Update position
+        self.position[0] += self.velocity[0] * dt;
+        self.position[1] += self.velocity[1] * dt;
+
+        // Sprite dimensions (128x128)
+        let sprite_width = 128.0;
+        let sprite_height = 128.0;
+
+        // Bounce off edges
+        if self.position[0] <= 0.0 || self.position[0] + sprite_width >= window_width {
+            self.velocity[0] = -self.velocity[0];
+            println!(
+                "Bounce X: pos=({:.1}, {:.1}), vel=({:.1}, {:.1})",
+                self.position[0], self.position[1], self.velocity[0], self.velocity[1]
+            );
+        }
+        if self.position[1] <= 0.0 || self.position[1] + sprite_height >= window_height {
+            self.velocity[1] = -self.velocity[1];
+            println!(
+                "Bounce Y: pos=({:.1}, {:.1}), vel=({:.1}, {:.1})",
+                self.position[0], self.position[1], self.velocity[0], self.velocity[1]
+            );
+        }
+
+        // Clamp position to screen bounds
+        self.position[0] = self.position[0].clamp(0.0, window_width - sprite_width);
+        self.position[1] = self.position[1].clamp(0.0, window_height - sprite_height);
+    }
+
+    fn get_transform_matrix(&self, window_width: f32, window_height: f32) -> [f32; 16] {
+        // Convert pixel coordinates to NDC
+        let ndc_x = (self.position[0] / window_width) * 2.0 - 1.0;
+        let ndc_y = -((self.position[1] / window_height) * 2.0 - 1.0); // Flip Y for DirectX
+
+        // Create simple translation matrix (row-major for HLSL mul(vector, matrix))
+        [
+            1.0, 0.0, 0.0, ndc_x, 0.0, 1.0, 0.0, ndc_y, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]
+    }
+}
+
+// Transform matrix constant buffer
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TransformBuffer {
+    transform: [f32; 16],
+}
+
 struct D3D11Context {
     device: ID3D11Device,
     device_context: ID3D11DeviceContext,
@@ -29,8 +102,13 @@ struct D3D11Context {
     texture: Option<ID3D11Texture2D>,
     texture_view: Option<ID3D11ShaderResourceView>,
     sampler_state: Option<ID3D11SamplerState>,
+    constant_buffer: Option<ID3D11Buffer>,
     window_width: f32,
     window_height: f32,
+    sprites: Vec<Sprite>,
+    last_time: Instant,
+    frame_count: u32,
+    last_log_time: Instant,
 }
 
 impl D3D11Context {
@@ -134,6 +212,7 @@ impl D3D11Context {
         #[cfg(not(any(debug_assertions, feature = "d3d11-debug")))]
         println!("DirectX 11 Debug Layer: DISABLED");
 
+        let now = Instant::now();
         let mut context = D3D11Context {
             device,
             device_context,
@@ -147,8 +226,13 @@ impl D3D11Context {
             texture: None,
             texture_view: None,
             sampler_state: None,
+            constant_buffer: None,
             window_width: 1920.0,
             window_height: 1080.0,
+            sprites: Vec::new(),
+            last_time: now,
+            frame_count: 0,
+            last_log_time: now,
         };
 
         // Create quad resources
@@ -156,18 +240,29 @@ impl D3D11Context {
             context.create_quad_resources()?;
         }
 
+        // Initialize sprites with count from command line or default
+        let sprite_count = get_sprite_count();
+        context.init_sprites(sprite_count);
+        println!("Initialized {} sprites", sprite_count);
+
         Ok(context)
     }
 
+    fn init_sprites(&mut self, count: usize) {
+        self.sprites.clear();
+        for _ in 0..count {
+            self.sprites.push(Sprite::new());
+        }
+    }
+
     unsafe fn create_quad_resources(&mut self) -> Result<()> {
-        // Define quad vertices (exactly 128x128 pixels, centered on screen)
-        // Calculate exact NDC coordinates based on current window size
+        // Define quad vertices (128x128 pixels, will be positioned by transform matrix)
         let half_width_ndc = 128.0 / self.window_width;
         let half_height_ndc = 128.0 / self.window_height;
         let vertices = [
             Vertex {
                 position: [-half_width_ndc, half_height_ndc, 0.0], // Top left
-                tex_coord: [0.0, 0.0],                             // UV coordinates
+                tex_coord: [0.0, 0.0],
             },
             Vertex {
                 position: [half_width_ndc, half_height_ndc, 0.0], // Top right
@@ -238,40 +333,10 @@ impl D3D11Context {
         }
 
         // Vertex shader source with simple orthogonal projection
-        let vs_source = r#"
-            struct VS_INPUT {
-                float3 pos : POSITION;
-                float2 tex : TEXCOORD;
-            };
-
-            struct VS_OUTPUT {
-                float4 pos : SV_POSITION;
-                float2 tex : TEXCOORD;
-            };
-
-            VS_OUTPUT main(VS_INPUT input) {
-                VS_OUTPUT output;
-                // Pass through NDC coordinates directly (already calculated)
-                output.pos = float4(input.pos, 1.0);
-                output.tex = input.tex;
-                return output;
-            }
-        "#;
+        let vs_source = VERTEX_SHADER;
 
         // Pixel shader source
-        let ps_source = r#"
-            Texture2D tex : register(t0);
-            SamplerState samplerState : register(s0);
-
-            struct PS_INPUT {
-                float4 pos : SV_POSITION;
-                float2 tex : TEXCOORD;
-            };
-
-            float4 main(PS_INPUT input) : SV_TARGET {
-                return tex.Sample(samplerState, input.tex);
-            }
-        "#;
+        let ps_source = PIXEL_SHADER;
 
         // Compile and create vertex shader
         let vs_blob = unsafe { self.compile_shader(vs_source, "main", "vs_5_0")? };
@@ -338,23 +403,43 @@ impl D3D11Context {
         }
 
         // Create sampler state with point filtering for pixel-perfect rendering
+        // Create and set up sampler state
         let sampler_desc = D3D11_SAMPLER_DESC {
-            Filter: D3D11_FILTER_MIN_MAG_MIP_POINT, // Nearest neighbor filtering
+            Filter: D3D11_FILTER_MIN_MAG_MIP_POINT, // Point filtering for pixel art
             AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
             AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
             AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
             MipLODBias: 0.0,
             MaxAnisotropy: 1,
-            ComparisonFunc: D3D11_COMPARISON_ALWAYS,
+            ComparisonFunc: D3D11_COMPARISON_NEVER,
             BorderColor: [0.0, 0.0, 0.0, 0.0],
             MinLOD: 0.0,
             MaxLOD: f32::MAX,
         };
 
+        let mut sampler_state = None;
         unsafe {
             self.device
-                .CreateSamplerState(&sampler_desc, Some(&mut self.sampler_state))?;
+                .CreateSamplerState(&sampler_desc, Some(&mut sampler_state))?;
         }
+        self.sampler_state = sampler_state;
+
+        // Create constant buffer for transform matrix
+        let cb_desc = D3D11_BUFFER_DESC {
+            ByteWidth: std::mem::size_of::<TransformBuffer>() as u32,
+            Usage: D3D11_USAGE_DYNAMIC,
+            BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+            MiscFlags: 0,
+            StructureByteStride: 0,
+        };
+
+        let mut constant_buffer = None;
+        unsafe {
+            self.device
+                .CreateBuffer(&cb_desc, None, Some(&mut constant_buffer))?;
+        }
+        self.constant_buffer = constant_buffer;
 
         Ok(())
     }
@@ -461,6 +546,34 @@ impl D3D11Context {
         Ok(blob.unwrap())
     }
 
+    fn update(&mut self) {
+        let current_time = Instant::now();
+        let dt = current_time.duration_since(self.last_time).as_secs_f32();
+        self.last_time = current_time;
+
+        // Update all sprites
+        for sprite in &mut self.sprites {
+            sprite.update(dt, self.window_width, self.window_height);
+        }
+
+        // Log FPS occasionally
+        self.frame_count += 1;
+        if current_time.duration_since(self.last_log_time).as_secs() >= 1 {
+            let fps = self.frame_count as f32
+                / current_time
+                    .duration_since(self.last_log_time)
+                    .as_secs_f32();
+            println!(
+                "FPS: {:.1} | Sprites: {} | Frame time: {:.2}ms",
+                fps,
+                self.sprites.len(),
+                dt * 1000.0
+            );
+            self.frame_count = 0;
+            self.last_log_time = current_time;
+        }
+    }
+
     unsafe fn render(&self) {
         if let Some(rtv) = &self.render_target_view {
             // Clear the render target to a solid color (cornflower blue)
@@ -529,11 +642,45 @@ impl D3D11Context {
                 };
                 self.device_context.RSSetViewports(Some(&[viewport]));
 
-                // Draw the quad
-                self.device_context.DrawIndexed(6, 0, 0);
+                // Draw all sprites
+                for sprite in &self.sprites {
+                    // Update transform matrix
+                    let transform_matrix =
+                        sprite.get_transform_matrix(self.window_width, self.window_height);
+                    let transform_buffer = TransformBuffer {
+                        transform: transform_matrix,
+                    };
+
+                    // Map and update constant buffer
+                    if let Some(constant_buffer) = &self.constant_buffer {
+                        let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
+                        if self
+                            .device_context
+                            .Map(
+                                constant_buffer,
+                                0,
+                                D3D11_MAP_WRITE_DISCARD,
+                                0,
+                                Some(&mut mapped_resource),
+                            )
+                            .is_ok()
+                        {
+                            let dst = mapped_resource.pData as *mut TransformBuffer;
+                            ptr::copy_nonoverlapping(&transform_buffer, dst, 1);
+                            self.device_context.Unmap(constant_buffer, 0);
+                        }
+
+                        // Set constant buffer
+                        self.device_context
+                            .VSSetConstantBuffers(0, Some(&[Some(constant_buffer.clone())]));
+                    }
+
+                    // Draw the sprite
+                    self.device_context.DrawIndexed(6, 0, 0);
+                }
 
                 // Present the frame
-                let _ = self.swap_chain.Present(1, 0);
+                let _ = self.swap_chain.Present(0, 0); // 0 for unlimited FPS
             }
         }
     }
@@ -578,6 +725,31 @@ impl D3D11Context {
 }
 
 static mut D3D_CONTEXT: Option<D3D11Context> = None;
+
+fn get_sprite_count() -> usize {
+    let args: Vec<String> = env::args().collect();
+    if args.len() > 1 {
+        match args[1].parse::<usize>() {
+            Ok(count) => {
+                if count > 0 && count <= 10000 {
+                    count
+                } else {
+                    println!("Warning: Sprite count must be between 1 and 10000. Using default: 1");
+                    1
+                }
+            }
+            Err(_) => {
+                println!(
+                    "Warning: Invalid sprite count '{}'. Using default: 1",
+                    args[1]
+                );
+                1
+            }
+        }
+    } else {
+        1 // Default sprite count (reduced for debugging)
+    }
+}
 
 fn main() -> Result<()> {
     unsafe {
@@ -629,11 +801,28 @@ fn main() -> Result<()> {
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = UpdateWindow(hwnd);
 
-        // Message loop
+        // Message loop with rendering
         let mut message = MSG::default();
-        while GetMessageW(&mut message, None, 0, 0).into() {
-            let _ = TranslateMessage(&message);
-            DispatchMessageW(&message);
+        loop {
+            // Process all pending messages
+            while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).into() {
+                if message.message == WM_QUIT {
+                    break;
+                }
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+
+            if message.message == WM_QUIT {
+                break;
+            }
+
+            // Update and render
+            let context_ptr = std::ptr::addr_of_mut!(D3D_CONTEXT);
+            if let Some(context) = (*context_ptr).as_mut() {
+                context.update();
+                context.render();
+            }
         }
 
         // Cleanup
@@ -694,3 +883,48 @@ extern "system" fn wndproc(window: HWND, message: u32, wparam: WPARAM, lparam: L
         }
     }
 }
+
+// Vertex shader source with transform matrix
+const VERTEX_SHADER: &str = r#"
+cbuffer TransformBuffer : register(b0)
+{
+    matrix transform;
+};
+
+struct VS_INPUT
+{
+    float3 position : POSITION;
+    float2 texCoord : TEXCOORD0;
+};
+
+struct VS_OUTPUT
+{
+    float4 position : SV_POSITION;
+    float2 texCoord : TEXCOORD0;
+};
+
+VS_OUTPUT main(VS_INPUT input)
+{
+    VS_OUTPUT output;
+    output.position = mul(float4(input.position, 1.0), transform);
+    output.texCoord = input.texCoord;
+    return output;
+}
+"#;
+
+// Pixel shader source
+const PIXEL_SHADER: &str = r#"
+Texture2D mainTexture : register(t0);
+SamplerState mainSampler : register(s0);
+
+struct PS_INPUT
+{
+    float4 position : SV_POSITION;
+    float2 texCoord : TEXCOORD0;
+};
+
+float4 main(PS_INPUT input) : SV_TARGET
+{
+    return mainTexture.Sample(mainSampler, input.texCoord);
+}
+"#;

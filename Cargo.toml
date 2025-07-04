@@ -24,6 +24,9 @@ version = "0.24"
 default-features = false
 features = ["png"]
 
+[dependencies.rand]
+version = "0.8"
+
 [features]
 default = []
 d3d11-debug = []
