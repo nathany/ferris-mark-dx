@@ -7,8 +7,8 @@ use windows::Win32::Graphics::Direct3D::ID3DBlob;
 use windows::{
     Win32::Foundation::*, Win32::Graphics::Direct3D::*, Win32::Graphics::Direct3D11::*,
     Win32::Graphics::Dxgi::Common::*, Win32::Graphics::Dxgi::*, Win32::Graphics::Gdi::*,
-    Win32::System::LibraryLoader::GetModuleHandleW, Win32::UI::Input::KeyboardAndMouse::*,
-    Win32::UI::WindowsAndMessaging::*, core::*,
+    Win32::System::LibraryLoader::GetModuleHandleW, Win32::UI::HiDpi::*,
+    Win32::UI::Input::KeyboardAndMouse::*, Win32::UI::WindowsAndMessaging::*, core::*,
 };
 
 // Vertex structure for our textured quad
@@ -24,6 +24,7 @@ struct Vertex {
 struct Sprite {
     position: [f32; 2],
     velocity: [f32; 2],
+    dpi_scale: f32,
 }
 
 impl Sprite {
@@ -37,6 +38,7 @@ impl Sprite {
         Self {
             position: [100.0, 100.0], // Start at top-left area
             velocity: [angle.cos() * speed, angle.sin() * speed],
+            dpi_scale: 1.0, // Will be set properly when sprite is created
         }
     }
 
@@ -45,9 +47,9 @@ impl Sprite {
         self.position[0] += self.velocity[0] * dt;
         self.position[1] += self.velocity[1] * dt;
 
-        // Sprite dimensions (128x128)
-        let sprite_width = 128.0;
-        let sprite_height = 128.0;
+        // Sprite dimensions (adjusted for DPI)
+        let sprite_width = 128.0 / self.dpi_scale;
+        let sprite_height = 128.0 / self.dpi_scale;
 
         // Bounce off edges
         if self.position[0] <= 0.0 || self.position[0] + sprite_width >= window_width {
@@ -95,8 +97,10 @@ struct D3D11Context {
     texture_view: Option<ID3D11ShaderResourceView>,
     sampler_state: Option<ID3D11SamplerState>,
     constant_buffer: Option<ID3D11Buffer>,
+    blend_state: Option<ID3D11BlendState>,
     window_width: f32,
     window_height: f32,
+    dpi_scale: f32,
     sprites: Vec<Sprite>,
     last_time: Instant,
     frame_count: u32,
@@ -109,6 +113,10 @@ impl D3D11Context {
         let mut device = None;
         let mut device_context = None;
         let mut swap_chain = None;
+
+        // Get DPI scaling factor
+        let dpi = unsafe { GetDpiForWindow(hwnd) };
+        let dpi_scale = dpi as f32 / 96.0; // 96 is the standard DPI
 
         // Get client rect for swap chain description
         let mut client_rect = RECT::default();
@@ -219,8 +227,10 @@ impl D3D11Context {
             texture_view: None,
             sampler_state: None,
             constant_buffer: None,
+            blend_state: None,
             window_width: 1920.0,
             window_height: 1080.0,
+            dpi_scale,
             sprites: Vec::new(),
             last_time: now,
             frame_count: 0,
@@ -243,14 +253,17 @@ impl D3D11Context {
     fn init_sprites(&mut self, count: usize) {
         self.sprites.clear();
         for _ in 0..count {
-            self.sprites.push(Sprite::new());
+            let mut sprite = Sprite::new();
+            sprite.dpi_scale = self.dpi_scale;
+            self.sprites.push(sprite);
         }
     }
 
     unsafe fn create_quad_resources(&mut self) -> Result<()> {
-        // Define quad vertices (128x128 pixels, will be positioned by transform matrix)
-        let half_width_ndc = 128.0 / self.window_width;
-        let half_height_ndc = 128.0 / self.window_height;
+        // Define quad vertices (adjust for DPI scaling to get proper physical size)
+        let physical_sprite_size = 128.0 / self.dpi_scale; // Smaller on high-DPI displays
+        let half_width_ndc = physical_sprite_size / self.window_width;
+        let half_height_ndc = physical_sprite_size / self.window_height;
         let vertices = [
             Vertex {
                 position: [-half_width_ndc, half_height_ndc, 0.0], // Top left
@@ -768,6 +781,9 @@ fn main() -> Result<()> {
         // Register the window class
         let atom = RegisterClassW(&wc);
         debug_assert!(atom != 0);
+
+        // Set process DPI awareness
+        let _ = SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE);
 
         // Create the window
         let hwnd = CreateWindowExW(
