@@ -52,17 +52,9 @@ impl Sprite {
         // Bounce off edges
         if self.position[0] <= 0.0 || self.position[0] + sprite_width >= window_width {
             self.velocity[0] = -self.velocity[0];
-            println!(
-                "Bounce X: pos=({:.1}, {:.1}), vel=({:.1}, {:.1})",
-                self.position[0], self.position[1], self.velocity[0], self.velocity[1]
-            );
         }
         if self.position[1] <= 0.0 || self.position[1] + sprite_height >= window_height {
             self.velocity[1] = -self.velocity[1];
-            println!(
-                "Bounce Y: pos=({:.1}, {:.1}), vel=({:.1}, {:.1})",
-                self.position[0], self.position[1], self.velocity[0], self.velocity[1]
-            );
         }
 
         // Clamp position to screen bounds
@@ -556,18 +548,18 @@ impl D3D11Context {
             sprite.update(dt, self.window_width, self.window_height);
         }
 
-        // Log FPS occasionally
+        // Log FPS occasionally (every 5 seconds to reduce debug spam)
         self.frame_count += 1;
-        if current_time.duration_since(self.last_log_time).as_secs() >= 1 {
+        if current_time.duration_since(self.last_log_time).as_secs() >= 5 {
             let fps = self.frame_count as f32
                 / current_time
                     .duration_since(self.last_log_time)
                     .as_secs_f32();
             println!(
-                "FPS: {:.1} | Sprites: {} | Frame time: {:.2}ms",
+                "FPS: {:.1} | Sprites: {} | Avg frame time: {:.2}ms",
                 fps,
                 self.sprites.len(),
-                dt * 1000.0
+                1000.0 / fps
             );
             self.frame_count = 0;
             self.last_log_time = current_time;
@@ -679,8 +671,8 @@ impl D3D11Context {
                     self.device_context.DrawIndexed(6, 0, 0);
                 }
 
-                // Present the frame
-                let _ = self.swap_chain.Present(0, 0); // 0 for unlimited FPS
+                // Present the frame with VSync enabled
+                let _ = self.swap_chain.Present(1, 0); // 1 for VSync
             }
         }
     }
@@ -734,20 +726,22 @@ fn get_sprite_count() -> usize {
                 if count > 0 && count <= 10000 {
                     count
                 } else {
-                    println!("Warning: Sprite count must be between 1 and 10000. Using default: 1");
-                    1
+                    println!(
+                        "Warning: Sprite count must be between 1 and 10000. Using default: 1000"
+                    );
+                    1000
                 }
             }
             Err(_) => {
                 println!(
-                    "Warning: Invalid sprite count '{}'. Using default: 1",
+                    "Warning: Invalid sprite count '{}'. Using default: 1000",
                     args[1]
                 );
-                1
+                1000
             }
         }
     } else {
-        1 // Default sprite count (reduced for debugging)
+        1000 // Default sprite count for benchmarking
     }
 }
 
