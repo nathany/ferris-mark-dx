@@ -12,21 +12,23 @@ use windows::{
 };
 
 // Vertex structure for our textured quad
+// #[repr(C)] ensures memory layout matches what DirectX expects
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct Vertex {
-    position: [f32; 3],
-    tex_coord: [f32; 2],
+    position: [f32; 3],  // 3D position (x, y, z) - z is always 0 for 2D sprites
+    tex_coord: [f32; 2], // UV texture coordinates (u, v) in [0,1] range
 }
 
 // Sprite structure for movement system
+// Handles physics simulation and screen-space positioning
 #[derive(Clone, Copy)]
 struct Sprite {
-    position: [f32; 2],
-    velocity: [f32; 2],
-    dpi_scale: f32,
-    sprite_width: f32,
-    sprite_height: f32,
+    position: [f32; 2], // Screen position in pixels (x, y)
+    velocity: [f32; 2], // Movement speed in pixels per second
+    dpi_scale: f32,     // High-DPI display scaling factor
+    sprite_width: f32,  // Sprite width in pixels
+    sprite_height: f32, // Sprite height in pixels
 }
 
 impl Sprite {
@@ -79,48 +81,64 @@ impl Sprite {
     }
 
     fn get_transform_matrix(&self, window_width: f32, window_height: f32) -> [f32; 16] {
-        // Convert pixel coordinates to NDC
+        // Convert pixel coordinates to NDC (Normalized Device Coordinates)
+        // NDC range: X [-1,1] left to right, Y [-1,1] bottom to top
         let ndc_x = (self.position[0] / window_width) * 2.0 - 1.0;
         let ndc_y = -((self.position[1] / window_height) * 2.0 - 1.0); // Flip Y for DirectX
 
-        // Create simple translation matrix (row-major for HLSL mul(vector, matrix))
+        // Create 4x4 translation matrix (row-major for HLSL mul(vector, matrix))
+        // This moves the sprite from origin (0,0) to the calculated NDC position
         [
-            1.0, 0.0, 0.0, ndc_x, //
-            0.0, 1.0, 0.0, ndc_y, //
-            0.0, 0.0, 1.0, 0.0, //
-            0.0, 0.0, 0.0, 1.0, //
+            1.0, 0.0, 0.0, ndc_x, // Row 0: X translation
+            0.0, 1.0, 0.0, ndc_y, // Row 1: Y translation
+            0.0, 0.0, 1.0, 0.0, // Row 2: Z unchanged (2D)
+            0.0, 0.0, 0.0, 1.0, // Row 3: Homogeneous coordinate
         ]
     }
 }
 
-// Transform matrix constant buffer
+// Transform matrix constant buffer - data passed to GPU shaders
+// #[repr(C)] ensures memory layout matches HLSL constant buffer
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct TransformBuffer {
-    transform: [f32; 16],
+    transform: [f32; 16], // 4x4 matrix for sprite positioning
 }
 
 struct D3D11Context {
-    device: ID3D11Device,
-    device_context: ID3D11DeviceContext,
-    swap_chain: IDXGISwapChain,
-    render_target_view: Option<ID3D11RenderTargetView>,
-    vertex_buffer: Option<ID3D11Buffer>,
-    index_buffer: Option<ID3D11Buffer>,
-    vertex_shader: Option<ID3D11VertexShader>,
-    pixel_shader: Option<ID3D11PixelShader>,
-    input_layout: Option<ID3D11InputLayout>,
-    texture: Option<ID3D11Texture2D>,
-    texture_view: Option<ID3D11ShaderResourceView>,
-    sampler_state: Option<ID3D11SamplerState>,
-    constant_buffer: Option<ID3D11Buffer>,
-    blend_state: Option<ID3D11BlendState>,
+    // Core DirectX objects
+    device: ID3D11Device,                // Factory for creating resources
+    device_context: ID3D11DeviceContext, // Interface for rendering commands
+    swap_chain: IDXGISwapChain,          // Front/back buffer management
+    render_target_view: Option<ID3D11RenderTargetView>, // Where to render pixels
+
+    // Geometry resources
+    vertex_buffer: Option<ID3D11Buffer>, // Quad vertices in GPU memory
+    index_buffer: Option<ID3D11Buffer>,  // Triangle indices for quad
+
+    // Shader pipeline
+    vertex_shader: Option<ID3D11VertexShader>, // Transforms vertex positions
+    pixel_shader: Option<ID3D11PixelShader>,   // Determines pixel colors
+    input_layout: Option<ID3D11InputLayout>,   // Vertex data format description
+
+    // Texture resources
+    texture: Option<ID3D11Texture2D>, // Sprite image data
+    texture_view: Option<ID3D11ShaderResourceView>, // Shader interface to texture
+    sampler_state: Option<ID3D11SamplerState>, // Texture filtering settings
+
+    // Rendering state
+    constant_buffer: Option<ID3D11Buffer>, // Per-sprite transform data
+    blend_state: Option<ID3D11BlendState>, // Alpha transparency settings
+
+    // Window and sprite properties
     window_width: f32,
     window_height: f32,
-    dpi_scale: f32,
-    sprite_width: f32,
+    dpi_scale: f32,    // High-DPI scaling factor
+    sprite_width: f32, // Sprite dimensions in pixels
     sprite_height: f32,
-    sprites: Vec<Sprite>,
+    sprites: Vec<Sprite>, // All sprite instances
+
+    // Performance tracking
     last_time: Instant,
     frame_count: u32,
     last_log_time: Instant,
@@ -339,33 +357,36 @@ impl D3D11Context {
         }
 
         // Define quad vertices (adjust for DPI scaling to get proper physical size)
+        // On high-DPI displays, sprites appear smaller to maintain consistent visual size
         let physical_sprite_width = self.sprite_width / self.dpi_scale; // Smaller on high-DPI displays
         let physical_sprite_height = self.sprite_height / self.dpi_scale;
+        // Convert to NDC space - half dimensions because sprite center is at origin
         let half_width_ndc = physical_sprite_width / self.window_width;
         let half_height_ndc = physical_sprite_height / self.window_height;
         let vertices = [
             Vertex {
-                position: [-half_width_ndc, half_height_ndc, 0.0], // Top left
-                tex_coord: [0.0, 0.0],
+                position: [-half_width_ndc, half_height_ndc, 0.0], // Top left in NDC
+                tex_coord: [0.0, 0.0],                             // Top left of texture
             },
             Vertex {
-                position: [half_width_ndc, half_height_ndc, 0.0], // Top right
-                tex_coord: [1.0, 0.0],
+                position: [half_width_ndc, half_height_ndc, 0.0], // Top right in NDC
+                tex_coord: [1.0, 0.0],                            // Top right of texture
             },
             Vertex {
-                position: [half_width_ndc, -half_height_ndc, 0.0], // Bottom right
-                tex_coord: [1.0, 1.0],
+                position: [half_width_ndc, -half_height_ndc, 0.0], // Bottom right in NDC
+                tex_coord: [1.0, 1.0],                             // Bottom right of texture
             },
             Vertex {
-                position: [-half_width_ndc, -half_height_ndc, 0.0], // Bottom left
-                tex_coord: [0.0, 1.0],
+                position: [-half_width_ndc, -half_height_ndc, 0.0], // Bottom left in NDC
+                tex_coord: [0.0, 1.0],                              // Bottom left of texture
             },
         ];
 
         // Define indices for two triangles making a quad
+        // GPU renders triangles, so we need 2 triangles to make a rectangle
         let indices: [u16; 6] = [
-            0, 1, 2, // First triangle
-            0, 2, 3, // Second triangle
+            0, 1, 2, // First triangle: top-left, top-right, bottom-right
+            0, 2, 3, // Second triangle: top-left, bottom-right, bottom-left
         ];
 
         // Create vertex buffer
@@ -484,12 +505,12 @@ impl D3D11Context {
         // Texture already loaded in create_quad_resources
 
         // Create sampler state with point filtering for pixel-perfect rendering
-        // Create and set up sampler state
+        // Sampler controls how texture pixels are interpolated when drawn at different sizes
         let sampler_desc = D3D11_SAMPLER_DESC {
-            Filter: D3D11_FILTER_MIN_MAG_MIP_POINT, // Point filtering for pixel art
-            AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
-            AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
-            AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
+            Filter: D3D11_FILTER_MIN_MAG_MIP_POINT, // Point filtering = sharp pixels (no blending)
+            AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,  // Clamp U coords to [0,1] range
+            AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,  // Clamp V coords to [0,1] range
+            AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,  // Not used for 2D textures
             MipLODBias: 0.0,
             MaxAnisotropy: 1,
             ComparisonFunc: D3D11_COMPARISON_NEVER,
@@ -506,11 +527,12 @@ impl D3D11Context {
         self.sampler_state = sampler_state;
 
         // Create constant buffer for transform matrix
+        // Dynamic buffer allows CPU to update transform data each frame
         let cb_desc = D3D11_BUFFER_DESC {
             ByteWidth: std::mem::size_of::<TransformBuffer>() as u32,
-            Usage: D3D11_USAGE_DYNAMIC,
+            Usage: D3D11_USAGE_DYNAMIC, // CPU can write, GPU can read
             BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32, // CPU write access
             MiscFlags: 0,
             StructureByteStride: 0,
         };
@@ -526,43 +548,45 @@ impl D3D11Context {
     }
 
     unsafe fn load_texture(&mut self) -> Result<()> {
-        // Load the PNG image
+        // Load the PNG image using the image crate
         let img = image::open("ferris_pixel_99x70_transparent.png")
             .map_err(|_e| Error::from_hresult(windows::core::HRESULT(-1)))?;
 
+        // Convert to RGBA8 format (8 bits per channel, 32 bits per pixel)
         let img = img.to_rgba8();
         let (width, height) = img.dimensions();
-        let pixels = img.as_raw();
+        let pixels = img.as_raw(); // Raw pixel data as bytes
 
         // Update sprite dimensions based on actual PNG size
         self.sprite_width = width as f32;
         self.sprite_height = height as f32;
         println!("Loaded sprite: {width}x{height} pixels");
 
-        // Create texture description
+        // Create texture description - tells DirectX about the image format
         let texture_desc = D3D11_TEXTURE2D_DESC {
             Width: width,
             Height: height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            MipLevels: 1,                       // No mipmaps (detail levels)
+            ArraySize: 1,                       // Single texture, not array
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM, // RGBA, 8 bits per channel
             SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
+                Count: 1, // No multisampling
                 Quality: 0,
             },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-            CPUAccessFlags: 0,
+            Usage: D3D11_USAGE_DEFAULT, // Standard GPU-only memory
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32, // Used as texture in shaders
+            CPUAccessFlags: 0,          // CPU cannot access after creation
             MiscFlags: 0,
         };
 
+        // Initial texture data - provides the pixel data to copy to GPU
         let texture_data = D3D11_SUBRESOURCE_DATA {
             pSysMem: pixels.as_ptr() as *const _,
-            SysMemPitch: width * 4, // 4 bytes per pixel (RGBA)
-            SysMemSlicePitch: 0,
+            SysMemPitch: width * 4, // 4 bytes per pixel (RGBA), row stride
+            SysMemSlicePitch: 0,    // Not used for 2D textures
         };
 
-        // Create texture
+        // Create texture in GPU memory
         unsafe {
             self.device.CreateTexture2D(
                 &texture_desc,
@@ -571,12 +595,13 @@ impl D3D11Context {
             )?;
         }
 
-        // Create shader resource view
+        // Create shader resource view - interface for shaders to read texture
+        // Think of this as a "view" or "window" into the texture data
         if let Some(texture) = &self.texture {
             unsafe {
                 self.device.CreateShaderResourceView(
                     texture,
-                    None,
+                    None, // Use default view (entire texture)
                     Some(&mut self.texture_view),
                 )?;
             }
@@ -591,29 +616,32 @@ impl D3D11Context {
         entry_point: &str,
         target: &str,
     ) -> Result<ID3DBlob> {
-        let mut blob = None;
-        let mut error_blob = None;
+        let mut blob = None; // Will contain compiled shader bytecode
+        let mut error_blob = None; // Will contain error messages if compilation fails
 
+        // Convert Rust strings to C strings for DirectX API
         let source_cstr = std::ffi::CString::new(source).unwrap();
         let entry_cstr = std::ffi::CString::new(entry_point).unwrap();
         let target_cstr = std::ffi::CString::new(target).unwrap();
 
+        // Compile HLSL shader source code to GPU bytecode
         let result = unsafe {
             D3DCompile(
-                source_cstr.as_ptr() as *const _,
-                source.len(),
-                None,
-                None,
-                None,
-                PCSTR(entry_cstr.as_ptr() as *const u8),
-                PCSTR(target_cstr.as_ptr() as *const u8),
-                0,
-                0,
-                &mut blob,
-                Some(&mut error_blob),
+                source_cstr.as_ptr() as *const _,         // HLSL source code
+                source.len(),                             // Source length
+                None,                                     // Source file name (optional)
+                None,                                     // Macro definitions (optional)
+                None,                                     // Include handler (optional)
+                PCSTR(entry_cstr.as_ptr() as *const u8),  // Entry point function name
+                PCSTR(target_cstr.as_ptr() as *const u8), // Shader model (vs_5_0, ps_5_0)
+                0,                                        // Compile flags
+                0,                                        // Effect flags
+                &mut blob,                                // Compiled bytecode output
+                Some(&mut error_blob),                    // Error messages output
             )
         };
 
+        // Handle compilation errors
         if result.is_err() {
             if let Some(error_blob) = error_blob {
                 let error_msg = unsafe {
@@ -665,17 +693,18 @@ impl D3D11Context {
     unsafe fn render(&self) {
         if let Some(rtv) = &self.render_target_view {
             // Clear the render target to a solid color (cornflower blue)
-            let clear_color = [0.39, 0.58, 0.93, 1.0]; // RGBA
+            let clear_color = [0.39, 0.58, 0.93, 1.0]; // RGBA values [0.0, 1.0]
             unsafe {
                 self.device_context.ClearRenderTargetView(rtv, &clear_color);
 
-                // Set up the rendering pipeline
+                // Set up the rendering pipeline - Output Merger stage
+                // This tells DirectX where to draw pixels (render target)
                 self.device_context
                     .OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
 
                 // Set blend state for alpha transparency
                 if let Some(blend_state) = &self.blend_state {
-                    let blend_factor = [0.0, 0.0, 0.0, 0.0];
+                    let blend_factor = [0.0, 0.0, 0.0, 0.0]; // Not used for our blend mode
                     self.device_context.OMSetBlendState(
                         blend_state,
                         Some(&blend_factor),
@@ -683,73 +712,84 @@ impl D3D11Context {
                     );
                 }
 
-                // Set vertex buffer
+                // Set vertex buffer - Input Assembler stage
+                // Tells GPU where to find vertex data and how to interpret it
                 if let Some(vertex_buffer) = &self.vertex_buffer {
-                    let stride = std::mem::size_of::<Vertex>() as u32;
-                    let offset = 0;
+                    let stride = std::mem::size_of::<Vertex>() as u32; // Size of each vertex
+                    let offset = 0; // Start at beginning of buffer
                     self.device_context.IASetVertexBuffers(
-                        0,
-                        1,
+                        0, // Input slot 0
+                        1, // One buffer
                         Some(&Some(vertex_buffer.clone())),
                         Some(&stride),
                         Some(&offset),
                     );
                 }
 
-                // Set index buffer
+                // Set index buffer - defines triangle connectivity
+                // Each index refers to a vertex in the vertex buffer
                 if let Some(index_buffer) = &self.index_buffer {
                     self.device_context
                         .IASetIndexBuffer(index_buffer, DXGI_FORMAT_R16_UINT, 0);
                 }
 
-                // Set input layout
+                // Set input layout - describes vertex structure to vertex shader
+                // Maps vertex buffer data to shader input parameters
                 if let Some(input_layout) = &self.input_layout {
                     self.device_context.IASetInputLayout(input_layout);
                 }
 
-                // Set primitive topology
+                // Set primitive topology - how vertices form shapes
+                // TRIANGLELIST: Every 3 vertices form a triangle
                 self.device_context
                     .IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-                // Set shaders
+                // Set shaders - programs that run on GPU
+                // Vertex shader: transforms vertex positions
                 if let Some(vertex_shader) = &self.vertex_shader {
                     self.device_context.VSSetShader(vertex_shader, None);
                 }
+                // Pixel shader: determines final pixel colors
                 if let Some(pixel_shader) = &self.pixel_shader {
                     self.device_context.PSSetShader(pixel_shader, None);
                 }
 
-                // Set texture and sampler
+                // Set texture and sampler for pixel shader
+                // Texture: the sprite image data
                 if let Some(texture_view) = &self.texture_view {
                     self.device_context
                         .PSSetShaderResources(0, Some(&[Some(texture_view.clone())]));
                 }
+                // Sampler: controls how texture is filtered when sampled
                 if let Some(sampler_state) = &self.sampler_state {
                     self.device_context
                         .PSSetSamplers(0, Some(&[Some(sampler_state.clone())]));
                 }
 
-                // Set viewport for pixel-perfect rendering using current window size
+                // Set viewport - defines screen area for rendering
+                // Maps NDC coordinates [-1,1] to pixel coordinates [0,width/height]
                 let viewport = D3D11_VIEWPORT {
-                    TopLeftX: 0.0,
-                    TopLeftY: 0.0,
-                    Width: self.window_width,
-                    Height: self.window_height,
-                    MinDepth: 0.0,
-                    MaxDepth: 1.0,
+                    TopLeftX: 0.0,              // Left edge of viewport
+                    TopLeftY: 0.0,              // Top edge of viewport
+                    Width: self.window_width,   // Viewport width in pixels
+                    Height: self.window_height, // Viewport height in pixels
+                    MinDepth: 0.0,              // Near depth (0.0 = closest)
+                    MaxDepth: 1.0,              // Far depth (1.0 = farthest)
                 };
                 self.device_context.RSSetViewports(Some(&[viewport]));
 
-                // Draw all sprites
+                // Draw all sprites - batch rendering with shared geometry
+                // Each sprite uses the same quad geometry but different transform
                 for sprite in &self.sprites {
-                    // Update transform matrix
+                    // Calculate transform matrix for this sprite's position
                     let transform_matrix =
                         sprite.get_transform_matrix(self.window_width, self.window_height);
                     let transform_buffer = TransformBuffer {
                         transform: transform_matrix,
                     };
 
-                    // Map and update constant buffer
+                    // Update constant buffer with sprite's transform matrix
+                    // Dynamic buffer allows CPU to update GPU data each frame
                     if let Some(constant_buffer) = &self.constant_buffer {
                         let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
                         if self
@@ -757,28 +797,33 @@ impl D3D11Context {
                             .Map(
                                 constant_buffer,
                                 0,
-                                D3D11_MAP_WRITE_DISCARD,
+                                D3D11_MAP_WRITE_DISCARD, // Discard old data, write new
                                 0,
                                 Some(&mut mapped_resource),
                             )
                             .is_ok()
                         {
+                            // Copy transform matrix to GPU memory
                             let dst = mapped_resource.pData as *mut TransformBuffer;
                             ptr::copy_nonoverlapping(&transform_buffer, dst, 1);
                             self.device_context.Unmap(constant_buffer, 0);
                         }
 
-                        // Set constant buffer
+                        // Bind constant buffer to vertex shader slot 0
                         self.device_context
                             .VSSetConstantBuffers(0, Some(&[Some(constant_buffer.clone())]));
                     }
 
-                    // Draw the sprite
+                    // Draw the sprite using indexed geometry
+                    // DrawIndexed(index_count, start_index, base_vertex)
+                    // 6 indices = 2 triangles, each triangle uses 3 indices
                     self.device_context.DrawIndexed(6, 0, 0);
                 }
 
                 // Present the frame with VSync enabled
-                let _ = self.swap_chain.Present(1, 0); // 1 for VSync
+                // Present(sync_interval, flags): 1 = VSync on, 0 = VSync off
+                // VSync caps framerate to display refresh rate (usually 60fps)
+                let _ = self.swap_chain.Present(1, 0);
             }
         }
     }
@@ -987,47 +1032,58 @@ extern "system" fn wndproc(window: HWND, message: u32, wparam: WPARAM, lparam: L
     }
 }
 
-// Vertex shader source with transform matrix
+// HLSL Vertex Shader - runs once per vertex, transforms positions
+// Constant buffer contains per-sprite transform matrix from CPU
 const VERTEX_SHADER: &str = r#"
 cbuffer TransformBuffer : register(b0)
 {
-    matrix transform;
+    matrix transform;  // 4x4 transform matrix for sprite positioning
 };
 
 struct VS_INPUT
 {
-    float3 position : POSITION;
-    float2 texCoord : TEXCOORD0;
+    float3 position : POSITION;    // Vertex position from vertex buffer
+    float2 texCoord : TEXCOORD0;   // Texture UV coordinates
 };
 
 struct VS_OUTPUT
 {
-    float4 position : SV_POSITION;
-    float2 texCoord : TEXCOORD0;
+    float4 position : SV_POSITION; // Screen position (required output)
+    float2 texCoord : TEXCOORD0;   // UV coords passed to pixel shader
 };
 
 VS_OUTPUT main(VS_INPUT input)
 {
     VS_OUTPUT output;
+
+    // Transform vertex position by sprite transform matrix
+    // Converts local quad coordinates to world position (NDC)
     output.position = mul(float4(input.position, 1.0), transform);
+
+    // Pass texture coordinates unchanged to pixel shader
     output.texCoord = input.texCoord;
+
     return output;
 }
 "#;
 
 // Pixel shader source
+// HLSL Pixel Shader - runs once per pixel, determines final color
+// Samples texture at UV coordinates and outputs RGBA color
 const PIXEL_SHADER: &str = r#"
-Texture2D mainTexture : register(t0);
-SamplerState mainSampler : register(s0);
+Texture2D spriteTexture : register(t0);  // Sprite texture bound to slot 0
+SamplerState spriteSampler : register(s0); // Sampler state bound to slot 0
 
 struct PS_INPUT
 {
-    float4 position : SV_POSITION;
-    float2 texCoord : TEXCOORD0;
+    float4 position : SV_POSITION; // Screen position (not used)
+    float2 texCoord : TEXCOORD0;   // UV coordinates from vertex shader
 };
 
 float4 main(PS_INPUT input) : SV_TARGET
 {
-    return mainTexture.Sample(mainSampler, input.texCoord);
+    // Sample texture at UV coordinates, return RGBA color
+    // Point filtering in sampler gives sharp, pixelated look
+    return spriteTexture.Sample(spriteSampler, input.texCoord);
 }
 "#;

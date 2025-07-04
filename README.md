@@ -14,6 +14,7 @@ A Windows DirectX 11 2D sprite rendering benchmark written in Rust, inspired by 
 - **Configurable Sprite Count**: Command-line argument for testing different loads
 - **VSync Support**: Smooth 60 FPS rendering with tear-free display
 - **Debug Layer Integration**: DirectX validation and performance analysis
+- **Educational Documentation**: Comprehensive DirectX 11 guide for beginners
 
 ## Building and Running
 
@@ -86,6 +87,15 @@ DirectX debug messages typically appear in:
 - **Debug Output Stream**: Captured by debugging tools like PIX or Visual Studio Graphics Diagnostics
 
 Note: Debug messages usually don't appear in the console when running standalone applications. The application will show "Debug Layer: ENABLED" to confirm the debug layer is active and capturing validation messages.
+
+## Learning Resources
+
+For developers new to DirectX 11 programming, see [DirectX.md](DirectX.md) for a comprehensive guide covering:
+- Core DirectX 11 concepts and objects
+- Rendering pipeline components
+- Coordinate systems and transformations
+- Shader programming basics
+- Performance optimization techniques
 
 ## Dependencies
 
