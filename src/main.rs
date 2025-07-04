@@ -1,4 +1,6 @@
 use std::ptr;
+use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
+use windows::Win32::Graphics::Direct3D::ID3DBlob;
 use windows::{
     Win32::Foundation::*, Win32::Graphics::Direct3D::*, Win32::Graphics::Direct3D11::*,
     Win32::Graphics::Dxgi::Common::*, Win32::Graphics::Dxgi::*, Win32::Graphics::Gdi::*,
@@ -6,11 +8,23 @@ use windows::{
     Win32::UI::WindowsAndMessaging::*, core::*,
 };
 
+// Vertex structure for our triangle
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 4],
+}
+
 struct D3D11Context {
     device: ID3D11Device,
     device_context: ID3D11DeviceContext,
     swap_chain: IDXGISwapChain,
     render_target_view: Option<ID3D11RenderTargetView>,
+    vertex_buffer: Option<ID3D11Buffer>,
+    vertex_shader: Option<ID3D11VertexShader>,
+    pixel_shader: Option<ID3D11PixelShader>,
+    input_layout: Option<ID3D11InputLayout>,
 }
 
 impl D3D11Context {
@@ -114,12 +128,205 @@ impl D3D11Context {
         #[cfg(not(any(debug_assertions, feature = "d3d11-debug")))]
         println!("DirectX 11 Debug Layer: DISABLED");
 
-        Ok(D3D11Context {
+        let mut context = D3D11Context {
             device,
             device_context,
             swap_chain,
             render_target_view,
-        })
+            vertex_buffer: None,
+            vertex_shader: None,
+            pixel_shader: None,
+            input_layout: None,
+        };
+
+        // Create triangle resources
+        unsafe {
+            context.create_triangle_resources()?;
+        }
+
+        Ok(context)
+    }
+
+    unsafe fn create_triangle_resources(&mut self) -> Result<()> {
+        // Define triangle vertices (centered, with different colors)
+        let vertices = [
+            Vertex {
+                position: [0.0, 0.5, 0.0],   // Top vertex
+                color: [1.0, 0.0, 0.0, 1.0], // Red
+            },
+            Vertex {
+                position: [0.5, -0.5, 0.0],  // Bottom right
+                color: [0.0, 1.0, 0.0, 1.0], // Green
+            },
+            Vertex {
+                position: [-0.5, -0.5, 0.0], // Bottom left
+                color: [0.0, 0.0, 1.0, 1.0], // Blue
+            },
+        ];
+
+        // Create vertex buffer
+        let vertex_buffer_desc = D3D11_BUFFER_DESC {
+            ByteWidth: (std::mem::size_of::<Vertex>() * vertices.len()) as u32,
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_VERTEX_BUFFER.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+            StructureByteStride: 0,
+        };
+
+        let vertex_data = D3D11_SUBRESOURCE_DATA {
+            pSysMem: vertices.as_ptr() as *const _,
+            SysMemPitch: 0,
+            SysMemSlicePitch: 0,
+        };
+
+        unsafe {
+            self.device.CreateBuffer(
+                &vertex_buffer_desc,
+                Some(&vertex_data),
+                Some(&mut self.vertex_buffer),
+            )?;
+        }
+
+        // Vertex shader source
+        let vs_source = r#"
+            struct VS_INPUT {
+                float3 pos : POSITION;
+                float4 color : COLOR;
+            };
+
+            struct VS_OUTPUT {
+                float4 pos : SV_POSITION;
+                float4 color : COLOR;
+            };
+
+            VS_OUTPUT main(VS_INPUT input) {
+                VS_OUTPUT output;
+                output.pos = float4(input.pos, 1.0f);
+                output.color = input.color;
+                return output;
+            }
+        "#;
+
+        // Pixel shader source
+        let ps_source = r#"
+            struct PS_INPUT {
+                float4 pos : SV_POSITION;
+                float4 color : COLOR;
+            };
+
+            float4 main(PS_INPUT input) : SV_TARGET {
+                return input.color;
+            }
+        "#;
+
+        // Compile and create vertex shader
+        let vs_blob = unsafe { self.compile_shader(vs_source, "main", "vs_5_0")? };
+        unsafe {
+            self.device.CreateVertexShader(
+                std::slice::from_raw_parts(
+                    vs_blob.GetBufferPointer() as *const u8,
+                    vs_blob.GetBufferSize(),
+                ),
+                None,
+                Some(&mut self.vertex_shader),
+            )?;
+        }
+
+        // Compile and create pixel shader
+        let ps_blob = unsafe { self.compile_shader(ps_source, "main", "ps_5_0")? };
+        unsafe {
+            self.device.CreatePixelShader(
+                std::slice::from_raw_parts(
+                    ps_blob.GetBufferPointer() as *const u8,
+                    ps_blob.GetBufferSize(),
+                ),
+                None,
+                Some(&mut self.pixel_shader),
+            )?;
+        }
+
+        // Create input layout
+        let input_desc = [
+            D3D11_INPUT_ELEMENT_DESC {
+                SemanticName: PCSTR(c"POSITION".as_ptr() as *const u8),
+                SemanticIndex: 0,
+                Format: DXGI_FORMAT_R32G32B32_FLOAT,
+                InputSlot: 0,
+                AlignedByteOffset: 0,
+                InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
+                InstanceDataStepRate: 0,
+            },
+            D3D11_INPUT_ELEMENT_DESC {
+                SemanticName: PCSTR(c"COLOR".as_ptr() as *const u8),
+                SemanticIndex: 0,
+                Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
+                InputSlot: 0,
+                AlignedByteOffset: 12, // 3 floats * 4 bytes
+                InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
+                InstanceDataStepRate: 0,
+            },
+        ];
+
+        unsafe {
+            self.device.CreateInputLayout(
+                &input_desc,
+                std::slice::from_raw_parts(
+                    vs_blob.GetBufferPointer() as *const u8,
+                    vs_blob.GetBufferSize(),
+                ),
+                Some(&mut self.input_layout),
+            )?;
+        }
+
+        Ok(())
+    }
+
+    unsafe fn compile_shader(
+        &self,
+        source: &str,
+        entry_point: &str,
+        target: &str,
+    ) -> Result<ID3DBlob> {
+        let mut blob = None;
+        let mut error_blob = None;
+
+        let source_cstr = std::ffi::CString::new(source).unwrap();
+        let entry_cstr = std::ffi::CString::new(entry_point).unwrap();
+        let target_cstr = std::ffi::CString::new(target).unwrap();
+
+        let result = unsafe {
+            D3DCompile(
+                source_cstr.as_ptr() as *const _,
+                source.len(),
+                None,
+                None,
+                None,
+                PCSTR(entry_cstr.as_ptr() as *const u8),
+                PCSTR(target_cstr.as_ptr() as *const u8),
+                0,
+                0,
+                &mut blob,
+                Some(&mut error_blob),
+            )
+        };
+
+        if result.is_err() {
+            if let Some(error_blob) = error_blob {
+                let error_msg = unsafe {
+                    let ptr = error_blob.GetBufferPointer() as *const u8;
+                    let len = error_blob.GetBufferSize();
+                    std::slice::from_raw_parts(ptr, len)
+                };
+                println!(
+                    "Shader compilation error: {}",
+                    String::from_utf8_lossy(error_msg)
+                );
+            }
+            return Err(result.unwrap_err());
+        }
+
+        Ok(blob.unwrap())
     }
 
     unsafe fn render(&self) {
@@ -128,6 +335,56 @@ impl D3D11Context {
             let clear_color = [0.39, 0.58, 0.93, 1.0]; // RGBA
             unsafe {
                 self.device_context.ClearRenderTargetView(rtv, &clear_color);
+
+                // Set up the rendering pipeline
+                self.device_context
+                    .OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
+
+                // Set vertex buffer
+                if let Some(vertex_buffer) = &self.vertex_buffer {
+                    let stride = std::mem::size_of::<Vertex>() as u32;
+                    let offset = 0;
+                    self.device_context.IASetVertexBuffers(
+                        0,
+                        1,
+                        Some(&Some(vertex_buffer.clone())),
+                        Some(&stride),
+                        Some(&offset),
+                    );
+                }
+
+                // Set input layout
+                if let Some(input_layout) = &self.input_layout {
+                    self.device_context.IASetInputLayout(input_layout);
+                }
+
+                // Set primitive topology
+                self.device_context
+                    .IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+                // Set shaders
+                if let Some(vertex_shader) = &self.vertex_shader {
+                    self.device_context.VSSetShader(vertex_shader, None);
+                }
+                if let Some(pixel_shader) = &self.pixel_shader {
+                    self.device_context.PSSetShader(pixel_shader, None);
+                }
+
+                // Set viewport
+                let _client_rect = RECT::default();
+                // Note: We need the window handle here, but for now we'll use a default viewport
+                let viewport = D3D11_VIEWPORT {
+                    TopLeftX: 0.0,
+                    TopLeftY: 0.0,
+                    Width: 1920.0,
+                    Height: 1080.0,
+                    MinDepth: 0.0,
+                    MaxDepth: 1.0,
+                };
+                self.device_context.RSSetViewports(Some(&[viewport]));
+
+                // Draw the triangle
+                self.device_context.Draw(3, 0);
 
                 // Present the frame
                 let _ = self.swap_chain.Present(1, 0);
