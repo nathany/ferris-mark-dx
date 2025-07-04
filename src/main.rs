@@ -38,7 +38,7 @@ impl Sprite {
         let speed = 200.0 + rand::random::<f32>() * 100.0; // 200-300 pixels/second
 
         Self {
-            position: [100.0, 100.0], // Start at top-left area
+            position: [200.0, 200.0], // Start away from edges (center position)
             velocity: [angle.cos() * speed, angle.sin() * speed],
             dpi_scale: 1.0,       // Will be set properly when sprite is created
             sprite_width: 128.0,  // Will be set properly when sprite is created
@@ -51,21 +51,31 @@ impl Sprite {
         self.position[0] += self.velocity[0] * dt;
         self.position[1] += self.velocity[1] * dt;
 
-        // Sprite dimensions (adjusted for DPI)
+        // Use actual sprite dimensions (adjusted for DPI)
         let sprite_width = self.sprite_width / self.dpi_scale;
         let sprite_height = self.sprite_height / self.dpi_scale;
 
-        // Bounce off edges
-        if self.position[0] <= 0.0 || self.position[0] + sprite_width >= window_width {
+        // Since sprite is center-origin, calculate half dimensions
+        let half_width = sprite_width / 2.0;
+        let half_height = sprite_height / 2.0;
+
+        // Bounce off edges accounting for center origin
+        if self.position[0] - half_width <= 0.0 {
+            self.position[0] = half_width;
             self.velocity[0] = -self.velocity[0];
         }
-        if self.position[1] <= 0.0 || self.position[1] + sprite_height >= window_height {
+        if self.position[0] + half_width >= window_width {
+            self.position[0] = window_width - half_width;
+            self.velocity[0] = -self.velocity[0];
+        }
+        if self.position[1] - half_height <= 0.0 {
+            self.position[1] = half_height;
             self.velocity[1] = -self.velocity[1];
         }
-
-        // Clamp position to screen bounds
-        self.position[0] = self.position[0].clamp(0.0, window_width - sprite_width);
-        self.position[1] = self.position[1].clamp(0.0, window_height - sprite_height);
+        if self.position[1] + half_height >= window_height {
+            self.position[1] = window_height - half_height;
+            self.velocity[1] = -self.velocity[1];
+        }
     }
 
     fn get_transform_matrix(&self, window_width: f32, window_height: f32) -> [f32; 16] {
@@ -264,8 +274,8 @@ impl D3D11Context {
             sampler_state: None,
             constant_buffer: None,
             blend_state,
-            window_width: 1920.0,
-            window_height: 1080.0,
+            window_width: width as f32,
+            window_height: height as f32,
             dpi_scale,
             sprite_width: 128.0,  // Will be updated when texture is loaded
             sprite_height: 128.0, // Will be updated when texture is loaded
@@ -284,6 +294,14 @@ impl D3D11Context {
         let sprite_count = get_sprite_count();
         context.init_sprites(sprite_count);
         println!("Initialized {sprite_count} sprites");
+        println!(
+            "Window client area: {}x{}",
+            context.window_width, context.window_height
+        );
+        println!(
+            "Sprite size: {}x{}",
+            context.sprite_width, context.sprite_height
+        );
 
         Ok(context)
     }
