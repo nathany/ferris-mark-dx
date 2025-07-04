@@ -12,7 +12,7 @@ DirectX Tool Kit (aka DirectXTK)
 3. SpriteBatch
 https://raw.githubusercontent.com/microsoft/DirectXTK/refs/heads/main/Src/SpriteBatch.cpp
 
-Later:
+Later (possibly a separate project derived from this one):
 * full-screen (Alt-Enter, etc.)
 * raw-window-handle
 * finding a solution for debug layer logging
