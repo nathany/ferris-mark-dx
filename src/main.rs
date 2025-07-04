@@ -38,7 +38,7 @@ impl Sprite {
         let speed = 200.0 + rand::random::<f32>() * 100.0; // 200-300 pixels/second
 
         Self {
-            position: [200.0, 200.0], // Start away from edges (center position)
+            position: [0.0, 0.0], // Will be set when sprite is added to context
             velocity: [angle.cos() * speed, angle.sin() * speed],
             dpi_scale: 1.0,       // Will be set properly when sprite is created
             sprite_width: 128.0,  // Will be set properly when sprite is created
@@ -313,6 +313,18 @@ impl D3D11Context {
             sprite.dpi_scale = self.dpi_scale;
             sprite.sprite_width = self.sprite_width;
             sprite.sprite_height = self.sprite_height;
+
+            // Random spawn position across the window (like commented Go code)
+            let sprite_width = sprite.sprite_width / sprite.dpi_scale;
+            let sprite_height = sprite.sprite_height / sprite.dpi_scale;
+            let half_width = sprite_width / 2.0;
+            let half_height = sprite_height / 2.0;
+
+            sprite.position[0] =
+                half_width + rand::random::<f32>() * (self.window_width - sprite_width);
+            sprite.position[1] =
+                half_height + rand::random::<f32>() * (self.window_height - sprite_height);
+
             self.sprites.push(sprite);
         }
     }
