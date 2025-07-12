@@ -103,7 +103,6 @@ Results running on a Ryzen 9700X and Radeon 9070 XT running driver version 25.6.
 * Unbatched release build: rendering 100,000 sprites at 60 fps, near 6,000,000 sprites/second
 * Batched debug build: rendering 240,000 sprites at locked 60 fps, 14,000,000 sprites/second
 * Batched release build: rendering 1,000,000 sprites at 60 fps, near 60,000,000 sprites/second
-* Batched release build: rendering 1,000,000 sprites at 165 fps, near 60,000,000 sprites/second
 * Batched release with vsync-off hitting 70 fps with 1,000,000 sprites or 350 fps with 200,000 sprites
 * Batched release with vsync @ 165 fps hitting 165 fps rendering 90,000 sprites
 
